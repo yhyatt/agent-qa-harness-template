@@ -32,6 +32,9 @@ function parseJudgment(text: string, finding: StepFinding, model: string): Model
   const cleaned = text.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim();
   const parsed = JSON.parse(cleaned) as Record<string, unknown>;
 
+  if (typeof parsed['pass'] !== 'boolean') {
+    throw new Error(`invalid pass: ${String(parsed['pass'])}`);
+  }
   if (!VALID_SEVERITIES.includes(parsed['severity'] as Severity)) {
     throw new Error(`invalid severity: ${String(parsed['severity'])}`);
   }
@@ -50,7 +53,7 @@ function parseJudgment(text: string, finding: StepFinding, model: string): Model
   return {
     step_id: stepId,
     model,
-    pass: Boolean(parsed['pass']),
+    pass: parsed['pass'] as boolean,
     severity,
     bucket,
     judgment: String(parsed['judgment'] ?? ''),
