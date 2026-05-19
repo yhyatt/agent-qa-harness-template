@@ -243,7 +243,7 @@ export function makeMockProvider(): Provider {
       const h = hashStrings(model, finding.step_id);
 
       // mock-a: passes everything with high confidence
-      if (model === 'mock-a' || model.endsWith('-a')) {
+      if (model === 'mock-a' || model.startsWith('mock-a-')) {
         return {
           step_id: finding.step_id,
           model,
@@ -263,7 +263,7 @@ export function makeMockProvider(): Provider {
       }
 
       // mock-b: fails on INFO severity findings (keeps severity, sets pass: false, bucket: cosmetic)
-      if (model === 'mock-b' || model.endsWith('-b')) {
+      if (model === 'mock-b' || model.startsWith('mock-b-')) {
         const isInfo = finding.severity === 'INFO';
         return {
           step_id: finding.step_id,
