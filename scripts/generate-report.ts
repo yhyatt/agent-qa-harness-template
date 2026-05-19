@@ -126,11 +126,23 @@ function normalizeScreenshotPath(p: string | undefined): string {
  * This helper collapses CR/LF runs to a single space, then trims.
  * Apply this BEFORE the pipe-escape used in table cells.
  *
+ * Also strips forbidden dash glyphs (AGENTS.md style rule):
+ *   - em-dash (U+2014) → ", "
+ *   - en-dash (U+2013) → ", "
+ *   - double-hyphen surrounded by whitespace (casual separator) → ", "
+ *     (only replaces " -- " patterns, not embedded flags like --flag)
+ *
  * Note: multi-paragraph model judgments will appear as one line in bullet
  * output. That is intentional; block-level injection is not allowed.
  */
 function escapeMarkdownInline(s: string): string {
-  return s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return s
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/—/g, ', ')   // em-dash → ", "
+    .replace(/–/g, ', ')   // en-dash → ", "
+    .replace(/\s--\s/g, ', ')   // space-surrounded double-hyphen → ", "
+    .trim();
 }
 
 // ---------------------------------------------------------------------------
