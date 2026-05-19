@@ -26,6 +26,12 @@ prompt() {
   echo "${var:-$default}"
 }
 
+# sed_escape: escape \, &, and the | delimiter so user-provided values are
+# treated as literal strings in a sed replacement (delimiter is |).
+sed_escape() {
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+
 # ---------------------------------------------------------------------------
 # Adapter writers
 # ---------------------------------------------------------------------------
@@ -233,7 +239,8 @@ fi
 # ---------------------------------------------------------------------------
 
 if [[ "$LOCALE" != "en-US" ]]; then
-  sed -i.bak "s/locale: 'en-US'/locale: '$LOCALE'/g" playwright.config.ts
+  SED_SAFE_LOCALE=$(sed_escape "$LOCALE")
+  sed -i.bak "s|locale: 'en-US'|locale: '$SED_SAFE_LOCALE'|g" playwright.config.ts
   rm -f playwright.config.ts.bak
   echo "playwright.config.ts: locale set to $LOCALE"
 fi
@@ -258,7 +265,8 @@ echo "journeys.spec.ts: J4 routes updated for $FRAMEWORK"
 # ---------------------------------------------------------------------------
 
 if [[ "$APP_URL" != "http://localhost:3000" ]]; then
-  sed -i.bak "s|'http://localhost:3000'|'$APP_URL'|g" .github/workflows/ci.yml
+  SED_SAFE_URL=$(sed_escape "$APP_URL")
+  sed -i.bak "s|'http://localhost:3000'|'$SED_SAFE_URL'|g" .github/workflows/ci.yml
   rm -f .github/workflows/ci.yml.bak
   echo "ci.yml: TEST_TARGET_URL default set to $APP_URL"
 fi
