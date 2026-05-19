@@ -182,7 +182,14 @@ async function main(): Promise<void> {
   // 1. Parse env
   const mockDispatch = process.env.MOCK_DISPATCH === '1';
   const allowSingleFamily = process.env.QA_ALLOW_SINGLE_FAMILY === '1';
-  const concurrency = parseInt(process.env.QA_DISPATCH_CONCURRENCY ?? '4', 10);
+  const rawConcurrency = process.env.QA_DISPATCH_CONCURRENCY ?? '4';
+  const concurrency = Number(rawConcurrency);
+  if (!Number.isInteger(concurrency) || concurrency <= 0) {
+    console.error(
+      `QA_DISPATCH_CONCURRENCY must be a positive integer, got: ${rawConcurrency}`,
+    );
+    process.exit(1);
+  }
   const modelList =
     process.env.QA_MODELS ?? 'claude-sonnet-4-6,google/gemini-2.5-pro,openai/gpt-5';
   const models = modelList.split(',').map((m) => m.trim()).filter(Boolean);
