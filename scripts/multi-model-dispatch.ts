@@ -65,10 +65,10 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
  * Resolves the run directory from the QA_RUN_DIR env value.
  *
  * Three forms are accepted:
- *  1. Timestamp run-id (YYYY-MM-DD-HHmm) — resolved under .qa-runs/.
- *  2. Path (contains / or \, or starts with . or /) — resolved relative to REPO_ROOT
+ *  1. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
  *     if not already absolute.
- *  3. Bare name (anything else) — treated as a run-id under .qa-runs/ with a stderr note.
+ *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
  */
 function resolveRunDir(envValue: string): string {
   const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
@@ -88,7 +88,7 @@ function resolveRunDir(envValue: string): string {
     return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
   }
 
-  // Form 3: bare name — treat as run-id and note it
+  // Form 3: bare name, treat as run-id and note it
   process.stderr.write(
     `note: interpreting QA_RUN_DIR='${envValue}' as a run id under .qa-runs/. ` +
       `Use a relative or absolute path to override.\n`,

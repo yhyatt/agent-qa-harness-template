@@ -343,13 +343,28 @@ export function isMockModel(model: string): boolean {
   return model.startsWith('mock-');
 }
 
+/** Returns true if the model name is one of the canonical mock names. */
+function isCanonicalMockModel(model: string): boolean {
+  return model === 'mock-a' || model === 'mock-b' || model === 'mock-c' ||
+    model.startsWith('mock-a-') || model.startsWith('mock-b-') || model.startsWith('mock-c-');
+}
+
 /**
  * Resolves the correct provider for a model.
  * When MOCK_DISPATCH=1, all models use the mock provider.
- * When a model starts with mock-, it also uses the mock provider.
+ * When a model is a canonical mock name (mock-a, mock-b, mock-c, or their mock-X-... variants),
+ * it uses the mock provider. Any other mock-* name is rejected.
  */
 export function resolveProvider(model: string, mockDispatch: boolean): Provider {
-  if (mockDispatch || isMockModel(model)) {
+  if (mockDispatch) {
+    return makeMockProvider();
+  }
+  if (isMockModel(model)) {
+    if (!isCanonicalMockModel(model)) {
+      throw new Error(
+        `unknown mock model: '${model}'. Supported: mock-a, mock-b, mock-c, or MOCK_DISPATCH=1 with any model name.`,
+      );
+    }
     return makeMockProvider();
   }
   if (isAnthropicModel(model)) {
