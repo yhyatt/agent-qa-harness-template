@@ -328,11 +328,19 @@ function renderSeveritySection(
 }
 
 // ---------------------------------------------------------------------------
-// Raw findings JSON shape (for axe_surfaces)
+// Raw findings JSON shape (for axe_surfaces and results)
 // ---------------------------------------------------------------------------
+
+interface RawJourneyResult {
+  id: string;
+  status: string;
+  durationMs: number;
+  finding_count: number;
+}
 
 interface RawRunJson {
   axe_surfaces?: AxeSurface[];
+  results?: RawJourneyResult[];
 }
 
 // ---------------------------------------------------------------------------
@@ -356,9 +364,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // 3. Optionally load axe_surfaces from upstream findings.json
+  // 3. Optionally load axe_surfaces and journey results from upstream findings.json
   let axeSurfaces: AxeSurface[] = [];
   let axeFallback = false;
+  let rawJourneyResults: RawJourneyResult[] | null = null;
   const rawFindingsPath = path.join(runDir, 'findings.json');
   try {
     const rawText = await fs.readFile(rawFindingsPath, 'utf-8');
@@ -368,9 +377,15 @@ async function main(): Promise<void> {
     } else {
       axeFallback = true;
     }
+    if (Array.isArray(raw.results) && raw.results.length > 0) {
+      rawJourneyResults = raw.results;
+    }
   } catch {
     // findings.json is optional; fallback to aggregation from deduped findings below
     axeFallback = true;
+    process.stderr.write(
+      `note: findings.json not found alongside findings.deduped.json; summary may omit zero-finding journeys.\n`,
+    );
   }
 
   const { meta, unanimous_findings, partial_findings, disagreements, stats, dispatch_errors } = run;
@@ -407,7 +422,19 @@ async function main(): Promise<void> {
   }
 
   // 5. Compute journey summaries
-  const journeyIds = new Set(allFindings.map((f) => f.journey_id));
+  // Seed journey IDs from findings.json results (captures zero-finding journeys).
+  // Fall back to deriving IDs from deduped findings if results are unavailable.
+  const findingJourneyIds = new Set(allFindings.map((f) => f.journey_id));
+  const allJourneyIds: Set<string> = new Set(
+    rawJourneyResults
+      ? rawJourneyResults.map((r) => r.id)
+      : [...findingJourneyIds],
+  );
+  // Also include any journey IDs that appear only in deduped findings (defensive).
+  for (const jid of findingJourneyIds) {
+    allJourneyIds.add(jid);
+  }
+
   const journeySummaries: Array<{
     id: string;
     status: 'ok' | 'issues';
@@ -416,7 +443,7 @@ async function main(): Promise<void> {
     highestSeverity: Severity;
   }> = [];
 
-  for (const jid of [...journeyIds].sort()) {
+  for (const jid of [...allJourneyIds].sort()) {
     const jFindings = allFindings.filter((f) => f.journey_id === jid);
     const findingCount = jFindings.length;
 
