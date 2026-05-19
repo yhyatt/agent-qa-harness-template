@@ -447,11 +447,24 @@ async function main(): Promise<void> {
     const jFindings = allFindings.filter((f) => f.journey_id === jid);
     const findingCount = jFindings.length;
 
-    // status: "issues" if any unanimous finding for this journey has all models failing
+    // status: "issues" if ANY of:
+    //   1. Any unanimous finding for this journey has all models failing (original logic).
+    //   2. Any partial_findings entry for this journey has majority fail (fail_count > total_count/2).
+    //   3. Any disagreement entry for this journey is at HIGH severity.
     const hasUnanimousIssue = unanimous_findings
       .filter((f) => f.journey_id === jid)
       .some((f) => f.fail_count === f.total_count && f.total_count > 0);
-    const status: 'ok' | 'issues' = hasUnanimousIssue ? 'issues' : 'ok';
+
+    const hasMajorityFailPartial = partial_findings
+      .filter((f) => f.journey_id === jid)
+      .some((f) => f.fail_count > f.total_count / 2);
+
+    const hasHighDisagreement = disagreements
+      .filter((f) => f.journey_id === jid)
+      .some((f) => f.severity === 'HIGH');
+
+    const status: 'ok' | 'issues' =
+      hasUnanimousIssue || hasMajorityFailPartial || hasHighDisagreement ? 'issues' : 'ok';
 
     // agreement: average of majority agreement across this journey's findings
     let agreedPairs = 0;
