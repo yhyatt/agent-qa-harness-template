@@ -12,7 +12,11 @@ Nothing deferred.
 
 ## Slice 3: generate-report.ts
 
-Nothing deferred.
+Deferred nits from Opus review (2026-05-19):
+
+- Pipe-escape applies to table cells but not to bullet content; if model output contains a single pipe in a bullet line it renders as-is (cosmetic only).
+- INFO compact rendering uses a `(<journey>)` parenthetical that could double-up with the per-finding `journey_id` field; minor cosmetic.
+- Per-journey severity calculation walks all three finding buckets every time; could be memoized but only matters at 100+ findings.
 
 ## Slice 4: scaffold.sh
 
