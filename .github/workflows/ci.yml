@@ -36,6 +36,7 @@ jobs:
           # SCAFFOLDER: set this to the consuming app's preview or production URL.
           # In a real consuming project, this typically comes from a Vercel preview
           # or a GitHub Actions output from an earlier deploy step.
+          # SCAFFOLDER: replace the default TEST_TARGET_URL value below with the consuming app's URL
           TEST_TARGET_URL: ${{ vars.TEST_TARGET_URL || 'http://localhost:3000' }}
         run: npm run test:e2e -- --grep "J4"
 
