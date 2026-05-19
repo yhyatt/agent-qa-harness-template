@@ -158,7 +158,7 @@ async function main(): Promise<void> {
         total_raw: 0,
         after_dedup: 0,
         agreement_rate: 0,
-        per_model_finding_counts: Object.fromEntries(
+        per_model_fail_counts: Object.fromEntries(
           [...meta.models].sort().map((m) => [m, 0]),
         ),
         dispatch_error_count: dispatch_errors.length,
@@ -304,7 +304,7 @@ async function main(): Promise<void> {
     total_raw: totalRaw,
     after_dedup: findings.length,
     agreement_rate: agreementRate,
-    per_model_finding_counts: perModelCountsSorted,
+    per_model_fail_counts: perModelCountsSorted,
     dispatch_error_count: dispatch_errors.length,
     ...(meta.models.length === 1 ? { warning: 'single-model run' } : {}),
   };

@@ -87,7 +87,7 @@ export interface DedupedRun {
     /** 0..1; share of (finding, model) pairs that agreed with majority. */
     agreement_rate: number;
     /** per-model count of pass=false judgments (excluding errors); sorted alphabetically. */
-    per_model_finding_counts: Record<string, number>;
+    per_model_fail_counts: Record<string, number>;
     /** pass-through from DispatchedRun. */
     dispatch_error_count: number;
     /** set to 'single-model run' when meta.models.length === 1. */

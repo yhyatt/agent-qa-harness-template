@@ -52,7 +52,7 @@
  *   - Total raw findings: N
  *   - After dedup: M
  *   - Agreement rate: X%
- *   - Per-model finding counts: ...
+ *   - Per-model fail counts: ...
  *
  * Implementation notes:
  *
