@@ -1,0 +1,145 @@
+{
+  "run_id": "2026-05-19-1900",
+  "timestamp": "2026-05-19T19:00:00.000Z",
+  "target": "https://staging.example.com",
+  "build": "abc1234",
+  "results": [
+    {
+      "id": "J1",
+      "status": "fail",
+      "durationMs": 12340,
+      "finding_count": 2
+    },
+    {
+      "id": "J4",
+      "status": "pass",
+      "durationMs": 8760,
+      "finding_count": 3
+    }
+  ],
+  "findings": [
+    {
+      "step_id": "J1/04",
+      "journey_id": "J1",
+      "step_name": "04-sign-in-button",
+      "action": "click the sign-in button and assert redirect to /auth/callback",
+      "severity": "HIGH",
+      "bucket": "blocking",
+      "title": "OAuth redirect lands on localhost instead of /auth/callback",
+      "screenshot_path": "tests/fixtures/dispatch-input/screenshots/J1/04-sign-in-button.png",
+      "locale_snapshot": [
+        "Sign in with Google",
+        "By continuing you agree to our Terms and Privacy Policy",
+        "Already have an account? Sign in"
+      ],
+      "db_state": null,
+      "console_errors": [],
+      "network_failures": ["302 http://localhost:3000/auth/callback"],
+      "axe_violations": 0,
+      "axe_top3": [],
+      "judgment": "After clicking the Google sign-in button, the OAuth redirect target is localhost:3000 rather than the production callback URL. Users on production will land on an error page after authenticating.",
+      "model": "playwright-agent"
+    },
+    {
+      "step_id": "J4/01",
+      "journey_id": "J4",
+      "step_name": "01-dashboard-load",
+      "action": "navigate to /dashboard and assert page title",
+      "severity": "INFO",
+      "bucket": "pass",
+      "title": "Dashboard loads with correct title",
+      "locale_snapshot": [
+        "Dashboard",
+        "Welcome back",
+        "Recent activity",
+        "No recent sessions"
+      ],
+      "db_state": null,
+      "console_errors": [],
+      "network_failures": [],
+      "axe_violations": 0,
+      "axe_top3": [],
+      "judgment": "Dashboard rendered correctly. Title and welcome copy match expected strings. No console errors or network failures observed.",
+      "model": "playwright-agent"
+    },
+    {
+      "step_id": "J4/02",
+      "journey_id": "J4",
+      "step_name": "02-create-session",
+      "action": "click Create Session button and assert modal opens",
+      "severity": "INFO",
+      "bucket": "pass",
+      "title": "Create session modal opens on button click",
+      "locale_snapshot": [
+        "Create Session",
+        "Session name",
+        "Start",
+        "Cancel"
+      ],
+      "db_state": null,
+      "console_errors": [],
+      "network_failures": [],
+      "axe_violations": 0,
+      "axe_top3": [],
+      "judgment": "Clicking Create Session opened the modal with correct copy. All form fields are present and labeled. No accessibility violations.",
+      "model": "playwright-agent"
+    },
+    {
+      "step_id": "J4/03",
+      "journey_id": "J4",
+      "step_name": "03-score-display",
+      "action": "reveal scores and assert score chips are distinct",
+      "severity": "MEDIUM",
+      "bucket": "cosmetic",
+      "title": "Duplicate chip DOM id causes wrong chip to highlight on reveal",
+      "locale_snapshot": [
+        "Reveal scores",
+        "Player A: 8",
+        "Player B: 5",
+        "Player C: 8"
+      ],
+      "db_state": null,
+      "console_errors": [],
+      "network_failures": [],
+      "axe_violations": 3,
+      "axe_top3": [
+        "duplicate-id: All id attribute values must be unique",
+        "color-contrast: Elements must have sufficient color contrast",
+        "label: Form elements must have labels"
+      ],
+      "judgment": "Score chips are rendered but two chips share the same DOM id. Axe-core flags this as a WCAG violation. The highlight animation applies to the first element with that id, causing the wrong chip to animate on reveal.",
+      "model": "playwright-agent"
+    },
+    {
+      "step_id": "J1/07",
+      "journey_id": "J1",
+      "step_name": "07-post-auth-dashboard",
+      "action": "assert post-auth redirect lands on /dashboard with user greeting",
+      "severity": "HIGH",
+      "bucket": "blocking",
+      "title": "ReferenceError thrown after auth; dashboard does not render",
+      "locale_snapshot": [],
+      "db_state": null,
+      "console_errors": [
+        "ReferenceError: foo is not defined"
+      ],
+      "network_failures": [],
+      "axe_violations": 0,
+      "axe_top3": [],
+      "judgment": "After the auth redirect, a ReferenceError fires in the client bundle. The dashboard component fails to mount. The user sees a blank page. This is a blocking regression.",
+      "model": "playwright-agent"
+    }
+  ],
+  "axe_surfaces": [
+    {
+      "route": "/dashboard",
+      "project": "chromium-desktop",
+      "violations": 3,
+      "top3": [
+        "duplicate-id: All id attribute values must be unique",
+        "color-contrast: Elements must have sufficient color contrast",
+        "label: Form elements must have labels"
+      ]
+    }
+  ]
+}
