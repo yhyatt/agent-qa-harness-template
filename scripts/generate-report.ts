@@ -46,6 +46,38 @@ async function findLatestRunDir(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Resolve QA_RUN_DIR to an absolute path (cross-cutting fix: PR #1 / PR #2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves the run directory from the QA_RUN_DIR env value.
+ *
+ * Accepted forms (applied in order):
+ *  1. Undefined or empty -> use findLatestRunDir().
+ *  2. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  3. Contains '/' or '\', starts with '.' or '/': treated as a path;
+ *     relative paths resolved against REPO_ROOT.
+ *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
+ */
+async function resolveRunDir(raw: string | undefined): Promise<string> {
+  if (!raw) {
+    return findLatestRunDir();
+  }
+  if (RUN_DIR_PATTERN.test(raw)) {
+    return path.join(REPO_ROOT, '.qa-runs', raw);
+  }
+  if (raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || raw.startsWith('/')) {
+    return path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw);
+  }
+  // Bare name: treat as run-id but warn
+  process.stderr.write(
+    `[report] note: interpreting QA_RUN_DIR='${raw}' as a run id under .qa-runs/. ` +
+      `Pass a full path or YYYY-MM-DD-HHmm run-id to suppress this note.\n`,
+  );
+  return path.join(REPO_ROOT, '.qa-runs', raw);
+}
+
+// ---------------------------------------------------------------------------
 // Severity ordering
 // ---------------------------------------------------------------------------
 
@@ -297,12 +329,7 @@ interface RawRunJson {
 
 async function main(): Promise<void> {
   // 1. Parse env
-  let runDir = process.env.QA_RUN_DIR ?? '';
-  if (!runDir) {
-    runDir = await findLatestRunDir();
-  } else if (!path.isAbsolute(runDir)) {
-    runDir = path.resolve(REPO_ROOT, runDir);
-  }
+  const runDir = await resolveRunDir(process.env.QA_RUN_DIR);
 
   // 2. Load input
   const dedupedPath = path.join(runDir, 'findings.deduped.json');
