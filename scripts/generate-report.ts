@@ -423,9 +423,13 @@ async function main(): Promise<void> {
     lines.push('No journeys in this run.');
   } else {
     for (const j of journeySummaries) {
-      lines.push(
-        `- ${j.id}: ${j.status} (${j.findingCount} findings, ${j.agreementPct.toFixed(1)}% agreement, ${j.highestSeverity})`,
-      );
+      if (j.findingCount === 0) {
+        lines.push(`- ${j.id}: ${j.status} (0 findings)`);
+      } else {
+        lines.push(
+          `- ${j.id}: ${j.status} (${j.findingCount} findings, ${j.agreementPct.toFixed(1)}% agreement, ${j.highestSeverity})`,
+        );
+      }
     }
   }
 
