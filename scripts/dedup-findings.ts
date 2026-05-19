@@ -201,7 +201,43 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 4. Classify each finding
+  // 4a. Group findings by dedup_key before classification.
+  //
+  // When findings.dispatched.json contains multiple entries sharing the same
+  // (journey_id, step_id, severity, normalized title) tuple, they are merged
+  // into a single DedupedFinding before bucket classification. Merge rules:
+  //   - model_judgments: iterate source findings in input order; later entries
+  //     win on key collision (last-write wins). Iteration within a finding's
+  //     model_judgments is alphabetical (enforced by sortedReplacer on write).
+  //   - fail_count / total_count: summed across the group.
+  //   - Other fields (action, title, severity, etc.): taken from the first
+  //     finding in the group.
+  //
+  // For v1 fixtures, step_id is unique per finding so every group has size 1;
+  // the merge path is a structural correctness guarantee for future inputs.
+  const groupMap = new Map<string, { first: (typeof findings)[0]; merged: Record<string, ModelJudgment> }>();
+  // Preserve insertion order for deterministic output
+  const groupOrder: string[] = [];
+
+  for (const finding of findings) {
+    const key = dedupKey(
+      finding.journey_id,
+      finding.step_id,
+      finding.severity,
+      finding.title,
+    );
+    if (!groupMap.has(key)) {
+      groupMap.set(key, { first: finding, merged: {} });
+      groupOrder.push(key);
+    }
+    const group = groupMap.get(key)!;
+    // Merge model_judgments: iterate alphabetically so last-write is deterministic
+    for (const model of Object.keys(finding.model_judgments).sort()) {
+      group.merged[model] = finding.model_judgments[model]!;
+    }
+  }
+
+  // 4b. Classify each merged group
   const unanimous: DedupedFinding[] = [];
   const partial: DedupedFinding[] = [];
   const disagreements: DedupedFinding[] = [];
@@ -219,8 +255,9 @@ async function main(): Promise<void> {
   // Cross-severity map: step_id -> Set of dedup_keys
   const stepKeyMap = new Map<string, Set<string>>();
 
-  for (const finding of findings) {
-    const judgments = Object.values(finding.model_judgments) as ModelJudgment[];
+  for (const key of groupOrder) {
+    const { first: finding, merged } = groupMap.get(key)!;
+    const judgments = Object.values(merged) as ModelJudgment[];
 
     // Filter out errored judgments; they don't count toward N
     const nonError = judgments.filter((j) => !j.error);
@@ -232,7 +269,7 @@ async function main(): Promise<void> {
     agreedPairs += Math.max(failCount, n - failCount);
 
     // Per-model pass=false counts
-    for (const [model, j] of Object.entries(finding.model_judgments)) {
+    for (const [model, j] of Object.entries(merged)) {
       if (!j.error && j.pass === false) {
         if (!(model in perModelCounts)) {
           // model not in meta.models (shouldn't happen, but be safe)
@@ -242,22 +279,17 @@ async function main(): Promise<void> {
       }
     }
 
-    const key = dedupKey(
-      finding.journey_id,
-      finding.step_id,
-      finding.severity,
-      finding.title,
-    );
-
     // Track cross-severity collisions for this step
     if (!stepKeyMap.has(finding.step_id)) {
       stepKeyMap.set(finding.step_id, new Set());
     }
     stepKeyMap.get(finding.step_id)!.add(key);
 
-    // Build the base DedupedFinding (spread, do not mutate input)
+    // Build the base DedupedFinding using the first finding's metadata and the
+    // merged model_judgments (do not mutate input)
     const dedupedBase: Omit<DedupedFinding, 'cross_severity_warning'> = {
       ...finding,
+      model_judgments: merged,
       dedup_key: key,
       fail_count: failCount,
       total_count: n,
@@ -331,7 +363,7 @@ async function main(): Promise<void> {
 
   const stats: DedupedRun['stats'] = {
     total_raw: totalRaw,
-    after_dedup: findings.length,
+    after_dedup: groupOrder.length,
     agreement_rate: agreementRate,
     per_model_fail_counts: perModelCountsSorted,
     dispatch_error_count: dispatch_errors.length,
@@ -357,7 +389,7 @@ async function main(): Promise<void> {
   const D = disagreementsSorted.length;
   const pct = (agreementRate * 100).toFixed(2);
   console.log(
-    `dedup: ${findings.length} findings into ${U} unanimous, ${P} partial, ${D} disagreement; agreement ${pct}%`,
+    `dedup: ${groupOrder.length} findings into ${U} unanimous, ${P} partial, ${D} disagreement; agreement ${pct}%`,
   );
 }
 
