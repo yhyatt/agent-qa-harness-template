@@ -33,6 +33,9 @@ cd my-app-qa
 # answers db?        postgres | d1 | mongo
 # answers host?      vercel | cloudflare
 # writes adapter files in place
+#
+# First-class adapters ship for: next-supabase, next-clerk.
+# Other combos write a stub adapter; fill it in per docs/CUSTOMIZATION.md.
 
 # 3. Install Playwright (reuse the host project's binary if you wire this as a sibling)
 npm install

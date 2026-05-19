@@ -53,6 +53,7 @@ export default defineConfig({
       name: 'mobile-iphone-13',
       use: {
         ...devices['iPhone 13'],
+        // SCAFFOLDER: replace 'en-US' below with the chosen primary locale
         locale: 'en-US',
       },
     },

@@ -333,6 +333,7 @@ test.describe('J4: static surface walk', () => {
 
     // TODO: list the static routes you want to walk. These are the routes
     // that should always render without auth and without errors.
+    // SCAFFOLDER: replace the route list below with framework-specific routes for the consuming app
     const routes = ['/', '/about', '/terms', '/nonexistent-slug-smoke-test'];
 
     let status: 'pass' | 'fail' = 'pass';
