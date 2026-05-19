@@ -194,7 +194,7 @@ function renderDisagreementEntry(f: DedupedFinding): string[] {
     const j = f.model_judgments[model]!;
     const passStr = j.error ? 'error' : j.pass ? 'yes' : 'no';
     const confStr = j.error ? 'n/a' : j.confidence.toFixed(2);
-    const judgSnippet = j.error ? `error: ${j.error}` : firstSentence(j.judgment);
+    const judgSnippet = (j.error ? `error: ${j.error}` : firstSentence(j.judgment)).replace(/\|/g, '\\|');
     lines.push(`  | ${model} | ${passStr} | ${confStr} | ${judgSnippet} |`);
   }
 
@@ -459,7 +459,7 @@ async function main(): Promise<void> {
     lines.push('|-------|------------|-----------|');
     for (const s of axeSurfaces) {
       const violLabel = s.violations < 0 ? 'scan failed' : String(s.violations);
-      const topIssue = s.top3.length > 0 ? (s.top3[0] ?? '') : 'none';
+      const topIssue = (s.top3.length > 0 ? (s.top3[0] ?? '') : 'none').replace(/\|/g, '\\|');
       lines.push(`| ${s.route} | ${violLabel} | ${topIssue} |`);
     }
   }
