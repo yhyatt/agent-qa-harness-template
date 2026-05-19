@@ -17,6 +17,7 @@ dist/
 # Generated dispatcher and dedup output in test fixtures (produced by verification runs, not committed)
 tests/fixtures/dispatch-input/findings.dispatched.json
 tests/fixtures/dispatch-input/findings.deduped.json
+tests/fixtures/dispatch-input/REPORT.final.md
 
 # Claude skills symlinks (workaround for project-shadows-global bug, see AGENTS.md "Local development env")
 .claude/skills/
