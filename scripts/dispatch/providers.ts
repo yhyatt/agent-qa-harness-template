@@ -10,6 +10,9 @@ import type { StepFinding } from '../../tests/e2e/journeys/helpers.js';
 import type { ModelJudgment, Severity, Bucket } from '../types.js';
 import { renderStep, SYSTEM_PROMPT } from './prompt.js';
 
+const VALID_SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
+const VALID_BUCKETS = ['pass', 'blocking', 'cosmetic', 'flake'] as const;
+
 export interface Provider {
   family: 'anthropic' | 'openrouter' | 'mock';
   dispatch(
@@ -29,6 +32,12 @@ function parseJudgment(text: string, finding: StepFinding, model: string): Model
   const cleaned = text.replace(/^```(?:json)?\s*/m, '').replace(/```\s*$/m, '').trim();
   const parsed = JSON.parse(cleaned) as Record<string, unknown>;
 
+  if (!VALID_SEVERITIES.includes(parsed['severity'] as Severity)) {
+    throw new Error(`invalid severity: ${String(parsed['severity'])}`);
+  }
+  if (!VALID_BUCKETS.includes(parsed['bucket'] as Bucket)) {
+    throw new Error(`invalid bucket: ${String(parsed['bucket'])}`);
+  }
   const severity = parsed['severity'] as Severity;
   const bucket = parsed['bucket'] as Bucket;
 
