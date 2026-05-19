@@ -95,7 +95,7 @@ function normalizeScreenshotPath(p: string | undefined): string {
  * Apply this BEFORE the pipe-escape used in table cells.
  *
  * Note: multi-paragraph model judgments will appear as one line in bullet
- * output. That is intentional — block-level injection is not allowed.
+ * output. That is intentional; block-level injection is not allowed.
  */
 function escapeMarkdownInline(s: string): string {
   return s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
