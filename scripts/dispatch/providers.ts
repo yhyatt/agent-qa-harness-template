@@ -32,8 +32,14 @@ function parseJudgment(text: string, finding: StepFinding, model: string): Model
   const severity = parsed['severity'] as Severity;
   const bucket = parsed['bucket'] as Bucket;
 
+  // Preserve the model's step_id echo; the dispatcher validates and coerces it.
+  const stepId =
+    typeof parsed['step_id'] === 'string' && parsed['step_id'].length > 0
+      ? parsed['step_id']
+      : finding.step_id;
+
   return {
-    step_id: finding.step_id, // validated and coerced by dispatcher
+    step_id: stepId,
     model,
     pass: Boolean(parsed['pass']),
     severity,
@@ -109,21 +115,24 @@ export function makeAnthropicProvider(): Provider {
         return textBlock ? (textBlock as { type: 'text'; text: string }).text : '';
       };
 
-      let rawText = '';
+      // callModel throws are network/5xx errors: let them propagate to the dispatcher.
+      // Only parseJudgment failures (malformed JSON) trigger the retry/synthetic path.
+      const rawText = await callModel();
+
+      let retryRaw = '';
       try {
-        rawText = await callModel();
         return parseJudgment(rawText, finding, model);
       } catch {
-        // Retry once with stricter instruction
+        // Parse failed on first attempt. Retry with stricter instruction.
+        retryRaw = await callModel(
+          'IMPORTANT: Return ONLY the JSON object. No prose, no code fences, no explanation. Start your response with { and end with }.',
+        );
         try {
-          rawText = await callModel(
-            'IMPORTANT: Return ONLY the JSON object. No prose, no code fences, no explanation. Start your response with { and end with }.',
-          );
-          return parseJudgment(rawText, finding, model);
-        } catch (retryErr) {
+          return parseJudgment(retryRaw, finding, model);
+        } catch (parseErr) {
           const reason =
-            retryErr instanceof Error ? retryErr.message : String(retryErr);
-          return syntheticError(model, finding, `parse failed after retry: ${reason}`, rawText);
+            parseErr instanceof Error ? parseErr.message : String(parseErr);
+          return syntheticError(model, finding, `parse failed after retry: ${reason}`, retryRaw);
         }
       }
     },
@@ -174,20 +183,24 @@ export function makeOpenRouterProvider(): Provider {
         return resp.choices[0]?.message?.content ?? '';
       };
 
-      let rawText = '';
+      // callModel throws are network/5xx errors: let them propagate to the dispatcher.
+      // Only parseJudgment failures (malformed JSON) trigger the retry/synthetic path.
+      const rawText = await callModel();
+
+      let retryRaw = '';
       try {
-        rawText = await callModel();
         return parseJudgment(rawText, finding, model);
       } catch {
+        // Parse failed on first attempt. Retry with stricter instruction.
+        retryRaw = await callModel(
+          'IMPORTANT: Return ONLY the JSON object. No prose, no code fences, no explanation. Start your response with { and end with }.',
+        );
         try {
-          rawText = await callModel(
-            'IMPORTANT: Return ONLY the JSON object. No prose, no code fences, no explanation. Start your response with { and end with }.',
-          );
-          return parseJudgment(rawText, finding, model);
-        } catch (retryErr) {
+          return parseJudgment(retryRaw, finding, model);
+        } catch (parseErr) {
           const reason =
-            retryErr instanceof Error ? retryErr.message : String(retryErr);
-          return syntheticError(model, finding, `parse failed after retry: ${reason}`, rawText);
+            parseErr instanceof Error ? parseErr.message : String(parseErr);
+          return syntheticError(model, finding, `parse failed after retry: ${reason}`, retryRaw);
         }
       }
     },
