@@ -83,9 +83,9 @@ The template repo itself follows the same slice routine Ballpark uses:
 
 1. Each slice runs as a chain of subagents from the main session. Orchestrator routes, briefs, reviews, decides. Heavy code work goes to a worktree subagent.
 2. Implementation subagent runs with `isolation: "worktree"` on a feature branch like `slice-N-<topic>`. Brief includes scope, hard rules from this file, and a green gate (typecheck before reporting back). The impl agent does not push.
-3. Review subagent (Opus 4.7, read-only) reviews the diff in the main worktree, writes findings to `.audit-<date>/REVIEW-<topic>.md`.
+3. Review subagent (Opus 4.7, read-only) reviews the diff in the main worktree, writes findings to `.audit-<date>/REVIEW-<topic>.md`. **The review subagent must invoke the `dishonest-code-audit` skill** as part of the pass (catches silent failures, stubs and mocks in production paths, stale TODOs claiming completion). Prose review without the audit skill regularly misses these.
 4. Orchestrator opens the PR with `gh pr create`. Never direct-merge to `main`.
-5. After every push, schedule a 10-minute remote agent to pull PR review state. Reply inline to every bot comment with the fixup SHA. Invoke `@codex review` explicitly after each fixup push (Copilot auto-re-reviews; Codex does not).
+5. After every push, schedule a 10-minute remote agent to pull PR review state. Reply inline to every bot comment with the fixup SHA. After every fixup push, explicitly invoke both Codex (`@codex review`) and Copilot (`@copilot review again`) as top-level PR comments. Neither bot auto-re-reviews on push; without explicit invocation the 10-min check returns nothing and gives a false "PR quiet" signal.
 6. Persistent artifacts (audits, reviews, impl notes, research outputs) live in `.<kind>-<topic>/` directories at the repo root, gitignored. Never `/tmp`.
 
 ## Out of scope for v1
