@@ -57,7 +57,9 @@ function parseJudgment(text: string, finding: StepFinding, model: string): Model
     concerns: Array.isArray(parsed['concerns'])
       ? (parsed['concerns'] as string[]).map(String)
       : [],
-    confidence: typeof parsed['confidence'] === 'number' ? parsed['confidence'] : 0.5,
+    confidence: typeof parsed['confidence'] === 'number'
+      ? Math.max(0, Math.min(1, parsed['confidence']))
+      : 0.5,
   };
 }
 
