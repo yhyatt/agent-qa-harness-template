@@ -92,7 +92,7 @@ async function findLatestRunDir(): Promise<string> {
  */
 async function loadScreenshot(
   screenshotPath: string,
-  stepId: string,
+  stepId: string | null,
   model: string,
   dispatchErrors: DispatchError[],
   cache: Map<string, string | null>,
@@ -279,9 +279,9 @@ async function main(): Promise<void> {
   );
 
   for (const sp of screenshotPaths) {
-    // Load once; errors reference the first model in the list for attribution
+    // Load once; errors are matrix-level (step_id: null) as they are per-path, not per finding-model pair.
     const firstModel = models[0] ?? 'unknown';
-    await loadScreenshot(sp, 'preload', firstModel, dispatchErrors, screenshotCache);
+    await loadScreenshot(sp, null, firstModel, dispatchErrors, screenshotCache);
   }
 
   // 6. Fan-out (AP#6: never await serially in the loop)
