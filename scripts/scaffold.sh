@@ -9,8 +9,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
-# Detect WSL UNC path issue (per reference_wsl_unc_paths memory): if cwd starts with
-# //wsl$ or //wsl.localhost, refuse and ask user to cd to native Linux path.
+# Refuse to run under a Windows UNC path (//wsl.localhost/...). Windows interop
+# reinterprets WSL paths as UNC routes, breaking sed/awk in subtle ways. Open a
+# WSL terminal and cd to the native Linux path (e.g. ~/projects/my-app-qa) instead.
 if [[ "$REPO_ROOT" == //wsl* || "$REPO_ROOT" == \\\\wsl* ]]; then
   echo "error: scaffolder cannot run from a Windows UNC path. Open a WSL terminal and cd to the linux path."
   exit 1
