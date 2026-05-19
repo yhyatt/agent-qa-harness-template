@@ -1,94 +1,450 @@
 /**
- * STUB - multi-model dispatcher.
+ * Multi-model dispatcher.
  *
- * NOT YET IMPLEMENTED. This is a structural shell describing what the
- * finished script will do. Filling this in is slice-14-proper work in
- * the first consuming project (Ballpark). After it hardens there,
- * port the implementation back here.
+ * Reads findings.json from a QA run directory, dispatches each finding
+ * to a configurable set of models in parallel (AP#6: no serial awaits in the
+ * fan-out loop), and writes findings.dispatched.json with per-model judgments.
  *
- * What this script does (when implemented):
- *
- *   1. Reads .qa-runs/<latest>/findings.json (produced by the Playwright run)
- *   2. For each finding, dispatches the per-step JSON to N models in parallel
- *      via Promise.allSettled (see docs/ANTI-PATTERNS.md #6)
- *   3. Each model receives:
- *        - the structured JSON for the step
- *        - the screenshot (as a base64 image content block)
- *        - the locale snapshot
- *        - a system prompt asking for a structured judgment
- *   4. Each model returns a JSON object conforming to the per-step schema
- *      with `model` filled in, `judgment` rewritten, `severity`/`bucket`
- *      potentially adjusted.
- *   5. Aggregates all model outputs back into one combined findings.json
- *      with a per-finding `model_judgments: { [model]: judgment }` map.
- *
- * Dispatch matrix (the default; configurable via env):
- *
- *   Tier        | Provider     | Use case
- *   ------------|--------------|--------------------------------------------
- *   Haiku 4.5   | Anthropic    | Cheap parallel sweep, every PR
- *   Sonnet 4.6  | Anthropic    | Standard baseline, every nightly run
- *   Opus 4.7    | Anthropic    | Hard cases (phase transitions, ambiguity)
- *   Gemini 2.5  | OpenRouter   | Cross-provider second opinion
- *   GPT-5       | OpenRouter   | Cross-provider second opinion (alt)
- *
- * Cost: see docs/COST-MODEL.md. Roughly $8 per full-suite multi-model run.
- *
- * Env vars consumed:
- *   ANTHROPIC_API_KEY        required for any Anthropic tier
- *   OPENROUTER_API_KEY       required for any non-Anthropic model
- *   QA_RUN_DIR               which .qa-runs/* directory to process (default: latest)
- *   QA_MODELS                comma-separated list, e.g. "haiku-4-5,sonnet-4-6,gemini-2-5-pro"
- *   QA_DISPATCH_CONCURRENCY  parallelism cap per provider (default: 4)
- *
- * Expected per-model output shape (each model must return exactly this):
- *
- *   interface ModelJudgment {
- *     step_id: string;             // must match the input step_id
- *     model: string;               // e.g. "claude-sonnet-4-6"
- *     pass: boolean;
- *     severity: 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
- *     bucket: 'pass' | 'blocking' | 'cosmetic' | 'flake';
- *     judgment: string;            // free-form prose, target ~150 words
- *     concerns: string[];          // bullet list of specific issues
- *     confidence: number;          // 0..1
- *   }
- *
- * Provider abstraction:
- *
- *   - Anthropic models go through @anthropic-ai/sdk (direct, supports caching)
- *   - All other models go through openai SDK pointed at openrouter.ai/api/v1
- *   - Both share a `dispatch(model: string, input: StepInput): Promise<ModelJudgment>` interface
- *
- * Implementation skeleton (TODO: fill in):
- *
- *   async function dispatchAll(findings: StepFinding[], models: string[]) {
- *     const tasks = findings.flatMap(f =>
- *       models.map(m => dispatch(m, f).then(j => ({ finding: f, judgment: j })))
- *     );
- *     const results = await Promise.allSettled(tasks);
- *     // group by finding.step_id; attach all model_judgments
- *     // write back to findings.json with model_judgments populated
- *   }
- *
- * Outputs:
- *   .qa-runs/<run>/findings.dispatched.json
- *   .qa-runs/<run>/REPORT.dispatched.md   (markdown rendering with per-model columns)
+ * Env vars:
+ *   QA_RUN_DIR              path to the .qa-runs/<run> directory (default: latest under .qa-runs/)
+ *   QA_MODELS               comma-separated model list (default: claude-sonnet-4-6,google/gemini-2.5-pro,openai/gpt-5)
+ *   QA_DISPATCH_CONCURRENCY parallelism cap per provider family (default: 4)
+ *   MOCK_DISPATCH           set to 1 to use the mock provider for all models
+ *   QA_ALLOW_SINGLE_FAMILY  set to 1 to bypass ADR-002 single-family check (for testing)
+ *   ANTHROPIC_API_KEY       required for any Anthropic-family model
+ *   OPENROUTER_API_KEY      required for any non-Anthropic, non-mock model
  */
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { StepFinding } from '../tests/e2e/journeys/helpers.js';
+import type { ModelJudgment, DispatchedFinding, DispatchError, DispatchedRun } from './types.js';
+import { resolveProvider, isAnthropicModel, isMockModel } from './dispatch/providers.js';
+import { SYSTEM_PROMPT } from './dispatch/prompt.js';
 
-async function main() {
-  // TODO: implement per the spec above.
-  console.error(
-    'multi-model-dispatch.ts: not yet implemented. See the script comment for the spec.',
-  );
-  process.exit(2);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..');
+
+// ---------------------------------------------------------------------------
+// Semaphore
+// ---------------------------------------------------------------------------
+
+function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
+  let active = 0;
+  const queue: Array<() => void> = [];
+
+  return function run<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const attempt = () => {
+        if (active < n) {
+          active++;
+          task()
+            .then(resolve, reject)
+            .finally(() => {
+              active--;
+              if (queue.length > 0) {
+                const next = queue.shift();
+                if (next) next();
+              }
+            });
+        } else {
+          queue.push(attempt);
+        }
+      };
+      attempt();
+    });
+  };
 }
 
-main();
+// ---------------------------------------------------------------------------
+// Find latest run directory / resolve QA_RUN_DIR
+// ---------------------------------------------------------------------------
 
-// Suppress unused-import lint until implementation lands.
-void fs;
-void path;
+/**
+ * Resolves the run directory from the QA_RUN_DIR env value.
+ *
+ * Three forms are accepted:
+ *  1. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
+ *     if not already absolute.
+ *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
+ */
+function resolveRunDir(envValue: string): string {
+  const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+  const isPath =
+    envValue.includes('/') ||
+    envValue.includes('\\') ||
+    envValue.startsWith('.') ||
+    envValue.startsWith('/');
+
+  if (TIMESTAMP_RE.test(envValue)) {
+    // Form 1: canonical run-id
+    return path.join(REPO_ROOT, '.qa-runs', envValue);
+  }
+
+  if (isPath) {
+    // Form 2: explicit path
+    return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
+  }
+
+  // Form 3: bare name, treat as run-id and note it
+  process.stderr.write(
+    `note: interpreting QA_RUN_DIR='${envValue}' as a run id under .qa-runs/. ` +
+      `Use a relative or absolute path to override.\n`,
+  );
+  return path.join(REPO_ROOT, '.qa-runs', envValue);
+}
+
+async function findLatestRunDir(): Promise<string> {
+  const base = path.resolve(REPO_ROOT, '.qa-runs');
+  let entries: string[];
+  try {
+    entries = await fs.readdir(base);
+  } catch {
+    throw new Error(
+      `No .qa-runs/ directory found at ${base}. ` +
+        'Run the Playwright harness first, or set QA_RUN_DIR.',
+    );
+  }
+  if (entries.length === 0) {
+    throw new Error(
+      `.qa-runs/ directory is empty. Run the Playwright harness first.`,
+    );
+  }
+  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HHmm) sorts correctly
+  const sorted = entries.sort();
+  return path.join(base, sorted[sorted.length - 1]!);
+}
+
+// ---------------------------------------------------------------------------
+// Screenshot loader
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a base64-encoded PNG string, or null if the file is missing or too large.
+ * Emits a dispatch_error entry (non-fatal) when the file is absent or oversized.
+ */
+async function loadScreenshot(
+  screenshotPath: string,
+  stepId: string | null,
+  model: string,
+  dispatchErrors: DispatchError[],
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  if (cache.has(screenshotPath)) {
+    return cache.get(screenshotPath)!;
+  }
+
+  const resolved = path.isAbsolute(screenshotPath)
+    ? screenshotPath
+    : path.resolve(REPO_ROOT, screenshotPath);
+
+  let data: Buffer;
+  try {
+    data = await fs.readFile(resolved);
+  } catch {
+    dispatchErrors.push({
+      model,
+      step_id: stepId,
+      message: `screenshot missing or unreadable: ${screenshotPath}`,
+    });
+    cache.set(screenshotPath, null);
+    return null;
+  }
+
+  // Anthropic per-image limit is 4MB. OpenRouter providers vary; a 3.9MB raw PNG
+  // becomes ~5.2MB as a base64 data URI that some OpenRouter providers may still reject.
+  // Those rejections bubble through as normal dispatch_errors.
+  const FOUR_MB = 4 * 1024 * 1024;
+  if (data.byteLength > FOUR_MB) {
+    dispatchErrors.push({
+      model,
+      step_id: stepId,
+      message: `screenshot too large (${data.byteLength} bytes > 4MB), dispatching text-only: ${screenshotPath}`,
+    });
+    cache.set(screenshotPath, null);
+    return null;
+  }
+
+  const b64 = data.toString('base64');
+  cache.set(screenshotPath, b64);
+  return b64;
+}
+
+// ---------------------------------------------------------------------------
+// Raw run JSON shape (from helpers.ts writeReport)
+// ---------------------------------------------------------------------------
+
+interface RawRunJson {
+  run_id: string;
+  timestamp: string;
+  target: string;
+  build: string;
+  results: unknown[];
+  findings: StepFinding[];
+  axe_surfaces: unknown[];
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic JSON serializer
+// ---------------------------------------------------------------------------
+
+/**
+ * Serializes an object with sorted keys at every level.
+ * Produces byte-identical output for the same logical content.
+ */
+function stableStringify(value: unknown, indent = 2): string {
+  return JSON.stringify(value, sortedReplacer, indent);
+}
+
+function sortedReplacer(_key: string, value: unknown): unknown {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const sorted: Record<string, unknown> = {};
+    for (const k of Object.keys(value as object).sort()) {
+      sorted[k] = (value as Record<string, unknown>)[k];
+    }
+    return sorted;
+  }
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  // 1. Parse env
+  const mockDispatch = process.env.MOCK_DISPATCH === '1';
+  const allowSingleFamily = process.env.QA_ALLOW_SINGLE_FAMILY === '1';
+  const rawConcurrency = process.env.QA_DISPATCH_CONCURRENCY ?? '4';
+  const concurrency = Number(rawConcurrency);
+  if (!Number.isInteger(concurrency) || concurrency <= 0) {
+    console.error(
+      `QA_DISPATCH_CONCURRENCY must be a positive integer, got: ${rawConcurrency}`,
+    );
+    process.exit(1);
+  }
+  const modelList =
+    process.env.QA_MODELS ?? 'claude-sonnet-4-6,google/gemini-2.5-pro,openai/gpt-5';
+  const models = modelList.split(',').map((m) => m.trim()).filter(Boolean);
+
+  const runDirEnv = process.env.QA_RUN_DIR;
+  const runDir = runDirEnv ? resolveRunDir(runDirEnv) : await findLatestRunDir();
+
+  // 2. Validate matrix (ADR-002)
+  // ADR-002 check comes FIRST, before key checks, so the message is unambiguous
+  // regardless of which keys are set in the environment.
+  if (!mockDispatch) {
+    const realModels = models.filter((m) => !isMockModel(m));
+    const anthropicModels = realModels.filter(isAnthropicModel);
+    const nonAnthropicModels = realModels.filter((m) => !isAnthropicModel(m));
+
+    if (realModels.length > 0 && nonAnthropicModels.length === 0 && !allowSingleFamily) {
+      console.error(
+        'ADR-002 violation: at least one non-Anthropic model is required in the dispatch matrix.\n' +
+          'Cross-provider second opinions are load-bearing for finding provider-family blind spots.\n' +
+          'Set QA_ALLOW_SINGLE_FAMILY=1 to override (testing only).\n' +
+          `Current model list: ${models.join(', ')}`,
+      );
+      process.exit(1);
+    }
+
+    // Key checks (after ADR-002)
+    if (anthropicModels.length > 0 && !process.env.ANTHROPIC_API_KEY) {
+      console.error(
+        `ANTHROPIC_API_KEY is not set but Anthropic models were requested: ${anthropicModels.join(', ')}`,
+      );
+      process.exit(1);
+    }
+    if (nonAnthropicModels.length > 0 && !process.env.OPENROUTER_API_KEY) {
+      console.error(
+        `OPENROUTER_API_KEY is not set but non-Anthropic models were requested: ${nonAnthropicModels.join(', ')}`,
+      );
+      process.exit(1);
+    }
+  }
+
+  // 3. Load findings
+  const findingsPath = path.join(runDir, 'findings.json');
+  let rawRun: RawRunJson;
+  try {
+    const text = await fs.readFile(findingsPath, 'utf-8');
+    rawRun = JSON.parse(text) as RawRunJson;
+  } catch (err) {
+    console.error(`Failed to read ${findingsPath}: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+
+  const findings: StepFinding[] = rawRun.findings ?? [];
+
+  // 4. Handle empty input
+  if (findings.length === 0) {
+    console.error('No findings in input. Writing empty dispatched run.');
+    const emptyRun: DispatchedRun = {
+      meta: {
+        run_id: rawRun.run_id,
+        timestamp: rawRun.timestamp,
+        target: rawRun.target,
+        build: rawRun.build,
+        models,
+      },
+      findings: [],
+      dispatch_errors: [],
+    };
+    const outPath = path.join(runDir, 'findings.dispatched.json');
+    await fs.writeFile(outPath, stableStringify(emptyRun));
+    console.error(`Wrote empty dispatched run to ${outPath}`);
+    return;
+  }
+
+  const dispatchErrors: DispatchError[] = [];
+  const screenshotCache = new Map<string, string | null>();
+
+  // Two semaphores: one per family
+  const anthropicLimit = semaphore(concurrency);
+  const openrouterLimit = semaphore(concurrency);
+  const mockLimit = semaphore(concurrency);
+
+  function limiterFor(model: string): ReturnType<typeof semaphore> {
+    if (isMockModel(model) || mockDispatch) return mockLimit;
+    if (isAnthropicModel(model)) return anthropicLimit;
+    return openrouterLimit;
+  }
+
+  // 5. Load screenshots (preload all)
+  // We preload with 'all-models' as placeholder; errors are deduplicated per screenshot path.
+  const screenshotPaths = new Set(
+    findings.filter((f) => f.screenshot_path).map((f) => f.screenshot_path!),
+  );
+
+  for (const sp of screenshotPaths) {
+    // Load once; errors are matrix-level (step_id: null) as they are per-path, not per finding-model pair.
+    const firstModel = models[0] ?? 'unknown';
+    await loadScreenshot(sp, null, firstModel, dispatchErrors, screenshotCache);
+  }
+
+  // 6. Fan-out (AP#6: never await serially in the loop)
+  type TaskResult =
+    | { ok: true; finding: StepFinding; model: string; judgment: ModelJudgment }
+    | { ok: false; finding: StepFinding; model: string; error: string };
+
+  const tasks = findings.flatMap((f) =>
+    models.map((m) => {
+      const limit = limiterFor(m);
+      const provider = resolveProvider(m, mockDispatch);
+      const screenshotB64 = f.screenshot_path
+        ? (screenshotCache.get(f.screenshot_path) ?? null)
+        : null;
+
+      return limit(() =>
+        provider
+          .dispatch(m, f, screenshotB64, SYSTEM_PROMPT)
+          .then((judgment): TaskResult => ({ ok: true, finding: f, model: m, judgment }))
+          .catch((err): TaskResult => ({
+            ok: false,
+            finding: f,
+            model: m,
+            error: err instanceof Error ? err.message : String(err),
+          })),
+      );
+    }),
+  );
+
+  const settled = await Promise.allSettled(tasks);
+
+  // 7. Aggregate
+  // Build a map indexed by step_id for deterministic ordering later
+  const findingMap = new Map<string, DispatchedFinding>();
+  for (const f of findings) {
+    findingMap.set(f.step_id, {
+      ...f,
+      model_judgments: {},
+    });
+  }
+
+  for (const result of settled) {
+    if (result.status === 'rejected') {
+      // Belt-and-suspenders: tasks already catch internally, but if the semaphore itself rejects
+      dispatchErrors.push({
+        model: 'unknown',
+        step_id: null,
+        message: `Unexpected task rejection: ${String(result.reason)}`,
+      });
+      continue;
+    }
+
+    const val = result.value;
+    if (!val.ok) {
+      dispatchErrors.push({
+        model: val.model,
+        step_id: val.finding.step_id,
+        message: val.error,
+      });
+      continue;
+    }
+
+    const { finding, model, judgment } = val;
+
+    // 8. step_id echo validation
+    if (judgment.step_id !== finding.step_id) {
+      process.stderr.write(
+        `Warning: model ${model} returned step_id "${judgment.step_id}" ` +
+          `but expected "${finding.step_id}". Coercing.\n`,
+      );
+      judgment.step_id = finding.step_id;
+    }
+
+    const dispatched = findingMap.get(finding.step_id);
+    if (dispatched) {
+      dispatched.model_judgments[model] = judgment;
+    }
+  }
+
+  // 9. Write output with deterministic ordering
+  const sortedFindings = [...findingMap.values()].sort((a, b) =>
+    a.step_id.localeCompare(b.step_id),
+  );
+
+  // Sort model_judgments keys within each finding
+  for (const f of sortedFindings) {
+    const sortedJudgments: Record<string, ModelJudgment> = {};
+    for (const k of Object.keys(f.model_judgments).sort()) {
+      sortedJudgments[k] = f.model_judgments[k]!;
+    }
+    f.model_judgments = sortedJudgments;
+  }
+
+  // Sort dispatch_errors for determinism
+  const sortedErrors = [...dispatchErrors].sort((a, b) => {
+    const stepCmp = (a.step_id ?? '').localeCompare(b.step_id ?? '');
+    if (stepCmp !== 0) return stepCmp;
+    return a.model.localeCompare(b.model);
+  });
+
+  const dispatchedRun: DispatchedRun = {
+    meta: {
+      run_id: rawRun.run_id,
+      timestamp: rawRun.timestamp, // preserve from input, not regenerated
+      target: rawRun.target,
+      build: rawRun.build,
+      models,
+    },
+    findings: sortedFindings,
+    dispatch_errors: sortedErrors,
+  };
+
+  const outPath = path.join(runDir, 'findings.dispatched.json');
+  await fs.writeFile(outPath, stableStringify(dispatchedRun));
+
+  const errorCount = sortedErrors.length;
+  const findingCount = sortedFindings.length;
+  console.error(
+    `Dispatch complete: ${findingCount} findings, ${errorCount} errors. Output: ${outPath}`,
+  );
+}
+
+main().catch((err) => {
+  console.error('Fatal:', err instanceof Error ? err.message : err);
+  process.exit(1);
+});

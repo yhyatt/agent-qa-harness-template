@@ -14,6 +14,9 @@ dist/
 .research-*/
 .design-*/
 
+# Generated dispatcher output in test fixtures (produced by verification runs, not committed)
+tests/fixtures/dispatch-input/findings.dispatched.json
+
 # Claude skills symlinks (workaround for project-shadows-global bug, see AGENTS.md "Local development env")
 .claude/skills/
 
