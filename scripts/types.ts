@@ -57,3 +57,52 @@ export interface DispatchedRun {
   findings: DispatchedFinding[];
   dispatch_errors: DispatchError[];
 }
+
+// ---------------------------------------------------------------------------
+// Dedup output types (produced by dedup-findings.ts)
+// ---------------------------------------------------------------------------
+
+export interface DedupedFinding extends DispatchedFinding {
+  /** sha1 hash, 12 hex chars. Derived from journey_id|step_id|severityBucket|normalizedTitle. */
+  dedup_key: string;
+  /** count of models that returned pass=false (excluding errored judgments). */
+  fail_count: number;
+  /** count of models that returned a valid judgment (excluding errored judgments). */
+  total_count: number;
+  /** sibling dedup_keys at different severity buckets for the same step. */
+  cross_severity_warning?: string[];
+}
+
+export interface DedupedRun {
+  /** pass-through from DispatchedRun; preserves run_id, timestamp, target, build, models. */
+  meta: DispatchedRun['meta'];
+  unanimous_findings: DedupedFinding[];
+  partial_findings: DedupedFinding[];
+  disagreements: DedupedFinding[];
+  /**
+   * Findings where every model dispatch errored (model_judgments is empty).
+   * Not unanimous; there is no consensus to speak of. Kept here so consumers
+   * can surface them rather than silently drop them.
+   */
+  errored_findings: DedupedFinding[];
+  stats: {
+    /** count of non-errored model_judgment entries across all findings. */
+    total_raw: number;
+    /**
+     * count of DedupedFinding objects after grouping (unanimous + partial +
+     * disagreements only; errored_findings are not included).
+     */
+    after_dedup: number;
+    /** 0..1; share of (finding, model) pairs that agreed with majority. */
+    agreement_rate: number;
+    /** per-model count of pass=false judgments (excluding errors); sorted alphabetically. */
+    per_model_fail_counts: Record<string, number>;
+    /** pass-through from DispatchedRun. */
+    dispatch_error_count: number;
+    /** count of findings where all model dispatches errored (no valid judgment). */
+    errored_finding_count: number;
+    /** set to 'single-model run' when meta.models.length === 1. */
+    warning?: string;
+  };
+  dispatch_errors: DispatchedRun['dispatch_errors'];
+}
