@@ -7,9 +7,15 @@ dist/
 .svelte-kit/
 .turbo/
 
-# QA harness output (gitignored — see ADR-008)
+# QA harness output (gitignored, see ADR-008)
 .qa-runs/
 .audit-*/
+.slice-*/
+.research-*/
+.design-*/
+
+# Claude skills symlinks (workaround for project-shadows-global bug, see AGENTS.md "Local development env")
+.claude/skills/
 
 # auth fixtures (contain live session cookies — never commit)
 tests/e2e/fixtures/*.json

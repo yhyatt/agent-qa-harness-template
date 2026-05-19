@@ -66,6 +66,28 @@ The template never reads project-specific env vars (`SUPABASE_*`, `CLERK_*`, etc
 - Do not merge a branch that lowers test coverage of journeys; add a journey for every new flow.
 - Examples directory is intentionally sparse. Add an example only when a real project has wet-run validated the stack.
 
+## Local development env (Claude Code)
+
+This repo ships its own skill at `.claude/skills/agent-qa-harness/`. Claude Code has a known bug where any project `.claude/skills/` directory shadows the global `~/.claude/skills/` entirely (see github.com/anthropics/claude-code/issues/44207). The workaround for local development is to symlink globals into the project skills dir:
+
+```bash
+mkdir -p .claude/skills
+for s in ~/.claude/skills/*/; do ln -sfn "$s" ".claude/skills/$(basename "$s")"; done
+```
+
+The `.gitignore` excludes `.claude/skills/` so the symlinks are local-only. The committed `agent-qa-harness/` subdirectory inside `.claude/skills/` is a regular directory, not a symlink, and is the one published with the template.
+
+## Orchestration (when implementing this repo)
+
+The template repo itself follows the same slice routine Ballpark uses:
+
+1. Each slice runs as a chain of subagents from the main session. Orchestrator routes, briefs, reviews, decides. Heavy code work goes to a worktree subagent.
+2. Implementation subagent runs with `isolation: "worktree"` on a feature branch like `slice-N-<topic>`. Brief includes scope, hard rules from this file, and a green gate (typecheck before reporting back). The impl agent does not push.
+3. Review subagent (Opus 4.7, read-only) reviews the diff in the main worktree, writes findings to `.audit-<date>/REVIEW-<topic>.md`.
+4. Orchestrator opens the PR with `gh pr create`. Never direct-merge to `main`.
+5. After every push, schedule a 10-minute remote agent to pull PR review state. Reply inline to every bot comment with the fixup SHA. Invoke `@codex review` explicitly after each fixup push (Copilot auto-re-reviews; Codex does not).
+6. Persistent artifacts (audits, reviews, impl notes, research outputs) live in `.<kind>-<topic>/` directories at the repo root, gitignored. Never `/tmp`.
+
 ## Out of scope for v1
 
 - Automatic GitHub issue creation from findings. Deferred until signal-to-noise is measured on real runs.
