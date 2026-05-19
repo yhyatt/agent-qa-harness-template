@@ -118,7 +118,9 @@ async function loadScreenshot(
     return null;
   }
 
-  // Anthropic limit: 4MB per image
+  // Anthropic per-image limit is 4MB. OpenRouter providers vary; a 3.9MB raw PNG
+  // becomes ~5.2MB as a base64 data URI that some OpenRouter providers may still reject.
+  // Those rejections bubble through as normal dispatch_errors.
   const FOUR_MB = 4 * 1024 * 1024;
   if (data.byteLength > FOUR_MB) {
     dispatchErrors.push({
