@@ -243,9 +243,9 @@ fi
 # (the line immediately after the SCAFFOLDER: marker)
 # ---------------------------------------------------------------------------
 
-ROUTES_FOR_FRAMEWORK="['/', '/about', '/nonexistent-smoke'],"
+ROUTES_LINE="    const routes = ['/', '/about', '/nonexistent-smoke'];"
 
-awk -v routes="    const routes = [$ROUTES_FOR_FRAMEWORK];" '
+awk -v routes="$ROUTES_LINE" '
   /SCAFFOLDER: replace the route list below/ { print; getline; print routes; next }
   { print }
 ' tests/e2e/journeys/journeys.spec.ts > tests/e2e/journeys/journeys.spec.ts.tmp \
