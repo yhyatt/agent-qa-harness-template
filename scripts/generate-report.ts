@@ -379,13 +379,21 @@ async function main(): Promise<void> {
 
   // 4. Build axe_surfaces from deduped findings if not from upstream
   if (axeSurfaces.length === 0) {
-    // Aggregate unique routes from all findings that have axe violations
+    // Aggregate unique routes from all findings that have axe violations or scan failures.
+    // axe_violations === -1 means scan failed (not zero violations); include those distinctly.
     const routeMap = new Map<string, { violations: number; top3: string[] }>();
     for (const f of allFindings) {
-      if (f.axe_violations > 0) {
+      if (f.axe_violations !== 0) {
         const route = f.step_id; // use step_id as route key since route is not available
         const existing = routeMap.get(route);
-        if (!existing || f.axe_violations > existing.violations) {
+        if (!existing) {
+          routeMap.set(route, { violations: f.axe_violations, top3: f.axe_top3 });
+        } else if (f.axe_violations === -1) {
+          // scan failure takes precedence only if no positive count already recorded
+          if (existing.violations === 0) {
+            routeMap.set(route, { violations: f.axe_violations, top3: f.axe_top3 });
+          }
+        } else if (f.axe_violations > existing.violations) {
           routeMap.set(route, { violations: f.axe_violations, top3: f.axe_top3 });
         }
       }
