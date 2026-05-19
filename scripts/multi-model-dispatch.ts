@@ -58,8 +58,43 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Find latest run directory
+// Find latest run directory / resolve QA_RUN_DIR
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolves the run directory from the QA_RUN_DIR env value.
+ *
+ * Three forms are accepted:
+ *  1. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
+ *     if not already absolute.
+ *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
+ */
+function resolveRunDir(envValue: string): string {
+  const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+  const isPath =
+    envValue.includes('/') ||
+    envValue.includes('\\') ||
+    envValue.startsWith('.') ||
+    envValue.startsWith('/');
+
+  if (TIMESTAMP_RE.test(envValue)) {
+    // Form 1: canonical run-id
+    return path.join(REPO_ROOT, '.qa-runs', envValue);
+  }
+
+  if (isPath) {
+    // Form 2: explicit path
+    return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
+  }
+
+  // Form 3: bare name, treat as run-id and note it
+  process.stderr.write(
+    `note: interpreting QA_RUN_DIR='${envValue}' as a run id under .qa-runs/. ` +
+      `Use a relative or absolute path to override.\n`,
+  );
+  return path.join(REPO_ROOT, '.qa-runs', envValue);
+}
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -182,17 +217,20 @@ async function main(): Promise<void> {
   // 1. Parse env
   const mockDispatch = process.env.MOCK_DISPATCH === '1';
   const allowSingleFamily = process.env.QA_ALLOW_SINGLE_FAMILY === '1';
-  const concurrency = parseInt(process.env.QA_DISPATCH_CONCURRENCY ?? '4', 10);
+  const rawConcurrency = process.env.QA_DISPATCH_CONCURRENCY ?? '4';
+  const concurrency = Number(rawConcurrency);
+  if (!Number.isInteger(concurrency) || concurrency <= 0) {
+    console.error(
+      `QA_DISPATCH_CONCURRENCY must be a positive integer, got: ${rawConcurrency}`,
+    );
+    process.exit(1);
+  }
   const modelList =
     process.env.QA_MODELS ?? 'claude-sonnet-4-6,google/gemini-2.5-pro,openai/gpt-5';
   const models = modelList.split(',').map((m) => m.trim()).filter(Boolean);
 
-  let runDir = process.env.QA_RUN_DIR ?? '';
-  if (!runDir) {
-    runDir = await findLatestRunDir();
-  } else if (!path.isAbsolute(runDir)) {
-    runDir = path.resolve(REPO_ROOT, runDir);
-  }
+  const runDirEnv = process.env.QA_RUN_DIR;
+  const runDir = runDirEnv ? resolveRunDir(runDirEnv) : await findLatestRunDir();
 
   // 2. Validate matrix (ADR-002)
   // ADR-002 check comes FIRST, before key checks, so the message is unambiguous
