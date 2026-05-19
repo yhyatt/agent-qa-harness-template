@@ -17,6 +17,8 @@ Nothing deferred.
 ## Slice 4: scaffold.sh
 
 - v1 ships `next-supabase` and `next-clerk` adapter heredocs only. Other framework or auth combos write a `// TODO: adapter not yet templated` stub with a loud warning. Add adapters as consuming projects demand them.
+- **Hostile-locale character validation** (deferred nit from Opus review). Currently no validation on the LOCALE prompt value. Characters like `'`, `"`, `;` could break the sed step despite the `sed_escape` helper (which covers `\`, `&`, `|` only). Add a tight regex guard `^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,4})?$` before any files are written.
+- **Order-of-operations: adapter written before sed runs** (deferred nit from Opus review). The scaffolder writes the adapter file before applying sed substitutions to config files. If a sed step fails, the workspace is partially dirty and re-running triggers the overwrite prompt unexpectedly. Fix: write all files at the end, after all sed operations succeed.
 
 ## Slice 5: Ballpark wet run
 
