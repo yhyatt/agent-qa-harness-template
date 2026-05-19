@@ -1,0 +1,48 @@
+name: ci
+
+# Runs J4 (the static surface walk, no auth required) on every PR.
+# Heavier journeys and multi-model dispatch are not part of CI; they run
+# nightly or on-demand via a separate workflow once the consuming project
+# wires its secrets.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  static-journey:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run J4 (static surface walk)
+        env:
+          # SCAFFOLDER: set this to the consuming app's preview or production URL.
+          # In a real consuming project, this typically comes from a Vercel preview
+          # or a GitHub Actions output from an earlier deploy step.
+          TEST_TARGET_URL: ${{ vars.TEST_TARGET_URL || 'http://localhost:3000' }}
+        run: npm run test:e2e -- --grep "J4"
+
+      - name: Upload QA run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-run-${{ github.run_id }}
+          path: .qa-runs/
+          if-no-files-found: ignore

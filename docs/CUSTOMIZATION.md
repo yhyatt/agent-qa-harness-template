@@ -1,0 +1,235 @@
+# Customization Guide
+
+How to adapt the template for a specific stack. Two concrete worked examples below: Next.js plus Supabase (Ballpark's stack, the first wet-run validator) and Next.js plus Clerk (the most common Vercel-ecosystem default).
+
+The interactive `scripts/scaffold.sh` will eventually do most of these substitutions automatically. Today it is a stub; the patches below are the manual recipe.
+
+## What the scaffolder needs to know
+
+When you run `scripts/scaffold.sh` (or do the substitutions by hand), it asks:
+
+1. **Framework.** Next.js, SvelteKit, Astro, Nuxt.
+2. **Auth provider.** Supabase, Clerk, Auth0.
+3. **Database.** Postgres (Neon or Supabase), Cloudflare D1, MongoDB.
+4. **Host.** Vercel, Cloudflare Workers.
+5. **Locale primary.** ISO code (`en-US`, `he-IL`, `de-DE`).
+6. **App URL placeholder.** Used as `TEST_TARGET_URL` default.
+
+The answers drive three things:
+
+- The auth fixture capture flow (different providers have different OAuth handshakes)
+- The DB-state capture helper (different drivers, different connection strings)
+- The locale config in `playwright.config.ts`
+
+## Adapter file pattern
+
+Each adapter lives in `tests/e2e/adapters/<stack>.ts` and exports a uniform interface:
+
+```ts
+export interface StackAdapter {
+  // Used by populate-auth.ts
+  captureAuthState(opts: {
+    url: string;
+    statePath: string;
+    role: 'host' | 'admin' | 'user';
+  }): Promise<void>;
+
+  // Used by helpers.ts in DB-state capture steps
+  captureDbState(opts: {
+    sessionId: string;
+    tables: string[];
+  }): Promise<Record<string, unknown[]>>;
+
+  // Used by the scaffolder for env var docs
+  requiredEnvVars: string[];
+}
+```
+
+The journey spec never imports an adapter directly. The helpers module does. This way the journey catalog stays stack-agnostic and only the helpers know about Supabase RPC versus Clerk JWT versus D1 prepared statements.
+
+## Example 1: Next.js plus Supabase (Ballpark's stack)
+
+**Auth fixture capture:**
+
+```ts
+// tests/e2e/adapters/nextjs-supabase.ts
+import { chromium } from '@playwright/test';
+
+export const nextjsSupabase: StackAdapter = {
+  async captureAuthState({ url, statePath, role }) {
+    const browser = await chromium.launch({ headless: false });
+    const ctx = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      // CUSTOMIZATION: set the locale used by your app's i18n config
+      locale: 'he-IL',
+    });
+    const page = await ctx.newPage();
+    // CUSTOMIZATION: this is the auth entry point for Supabase OAuth flow
+    await page.goto(`${url}/auth/login`);
+    console.log(`Sign in as ${role}. Press Enter when at the dashboard.`);
+    await new Promise((res) => process.stdin.once('data', res));
+    await ctx.storageState({ path: statePath });
+    await browser.close();
+  },
+
+  async captureDbState({ sessionId, tables }) {
+    // CUSTOMIZATION: import the supabase admin client from the consuming app
+    // and read the requested tables filtered by session_id
+    throw new Error('Implement against the consuming app supabase client');
+  },
+
+  requiredEnvVars: [
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    'SUPABASE_SECRET_KEY',
+  ],
+};
+```
+
+**DB state capture pattern:**
+
+For Postgres-on-Supabase, the natural approach is to expose a `qa_capture_state(session_id uuid)` RPC function that returns the per-table rows you want to assert against, JSON-encoded. The harness calls the RPC; the SQL function decides what to expose. This keeps the harness from needing direct DB credentials.
+
+**RLS consideration:** if the harness runs against staging with the publishable key only, the QA fixture user must have RLS policies allowing reads on the tables it inspects. Easier path: route DB-state capture through the host's authenticated session (the storageState already covers it).
+
+**Shadow project provisioning:**
+
+```bash
+# create a separate Supabase project for QA runs
+# this is a one-time setup, not part of every run
+supabase projects create my-app-qa --org-id <org>
+supabase db push --project-ref <new-project-ref>
+# point TEST_TARGET_URL at the staging deploy of the consuming app,
+# configured to use the QA Supabase project
+```
+
+The shadow project lets destructive QA runs (delete sessions, clear state) not pollute dev or prod data.
+
+## Example 2: Next.js plus Clerk
+
+**Auth fixture capture:**
+
+Clerk's hosted UI changes URL paths frequently. The capture script should not hard-code the sign-in URL; instead, navigate to a protected route and let Clerk redirect to its own UI.
+
+```ts
+// tests/e2e/adapters/nextjs-clerk.ts
+import { chromium } from '@playwright/test';
+
+export const nextjsClerk: StackAdapter = {
+  async captureAuthState({ url, statePath, role }) {
+    const browser = await chromium.launch({ headless: false });
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await ctx.newPage();
+    // CUSTOMIZATION: a protected route forces Clerk's sign-in redirect
+    await page.goto(`${url}/dashboard`);
+    console.log(`Sign in as ${role}. Press Enter when at /dashboard.`);
+    await new Promise((res) => process.stdin.once('data', res));
+    await ctx.storageState({ path: statePath });
+    await browser.close();
+  },
+
+  async captureDbState({ sessionId, tables }) {
+    // CUSTOMIZATION: Clerk does not provide a DB; the app's own DB
+    // (Postgres, Mongo, etc) is independent. Adapt to the DB layer.
+    throw new Error('Implement against the consuming app DB client');
+  },
+
+  requiredEnvVars: [
+    'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY',
+    'CLERK_SECRET_KEY',
+  ],
+};
+```
+
+**Clerk JWT considerations:**
+
+Clerk session tokens are short-lived (60s by default). The `storageState` file captures the session cookie which Clerk uses to mint fresh JWTs. The fixture is good for ~7 days; after that, recapture.
+
+The harness will produce a clear error when a fixture has expired (network 401s on the first authed request). Treat it as a known recurring task. Cron the recapture if you have a stable QA account credential.
+
+## Other framework substitutions
+
+### SvelteKit
+
+- The journey spec is identical; Playwright does not care about framework.
+- The auth fixture capture is auth-provider-specific, not framework-specific.
+- `playwright.config.ts` does not change except for the `webServer` block, if you use it to start a local dev server.
+
+### Astro and Nuxt
+
+- Same. Playwright drives the rendered DOM, which is framework-agnostic.
+- Watch for hydration-timing differences: Astro's island architecture means some interactive elements appear later than their HTML. Pattern A's `expect(...).toBeVisible()` handles this; manual `waitForTimeout` does not.
+
+## Locale customization
+
+```ts
+// playwright.config.ts (edit this when scaffolding)
+projects: [
+  {
+    name: 'chromium-desktop',
+    use: {
+      ...devices['Desktop Chrome'],
+      viewport: { width: 1280, height: 900 },
+      // CUSTOMIZATION: set to your app's primary locale
+      locale: 'en-US', // or 'he-IL', 'de-DE', 'ja-JP'
+    },
+  },
+  // ...
+]
+```
+
+The `locale-snapshot` helper does not need locale-specific logic. It captures all user-visible text on the page; the locale is implicit in what comes back.
+
+## DB driver substitutions
+
+### Postgres (Neon or Supabase)
+
+```ts
+import postgres from 'postgres';
+const sql = postgres(process.env.QA_DATABASE_URL!);
+const rows = await sql`select * from sessions where id = ${sessionId}`;
+```
+
+### Cloudflare D1
+
+The D1 binding is a Workers runtime concern; from a Node script you need the D1 HTTP API.
+
+```ts
+const resp = await fetch(`https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/d1/database/${DB_ID}/query`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${process.env.CF_API_TOKEN}` },
+  body: JSON.stringify({ sql: 'select * from sessions where id = ?', params: [sessionId] }),
+});
+```
+
+### MongoDB
+
+```ts
+import { MongoClient } from 'mongodb';
+const client = await MongoClient.connect(process.env.MONGO_URL!);
+const session = await client.db().collection('sessions').findOne({ _id: sessionId });
+```
+
+## Hosting substitutions
+
+### Vercel
+
+- `TEST_TARGET_URL` points at the production or preview URL
+- CI in `.github/workflows/ci.yml` can use Vercel CLI to fetch the latest preview URL for the PR and target it
+
+### Cloudflare Workers
+
+- `TEST_TARGET_URL` points at the `*.workers.dev` URL or the custom domain
+- CI uses `wrangler deploy --dry-run` to validate before triggering the harness
+
+## Migration: from a custom harness to this template
+
+If you already have Playwright tests, the migration is:
+
+1. Move existing `.spec.ts` files into `tests/e2e/journeys/`
+2. Refactor each test to push findings into the shared `findings[]` accumulator
+3. Replace `expect()` assertions with the harness pattern: capture the failure as a finding, then `expect(status).not.toBe('fail')` at the end
+4. Add the journey to the `J<N>` numbering scheme
+5. Wire the helpers (`screenshot`, `attachListeners`, `runAxe`, `writeReport`)
+
+Most tests port over in under an hour each.
