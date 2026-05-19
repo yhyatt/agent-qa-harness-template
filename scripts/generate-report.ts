@@ -319,15 +319,19 @@ async function main(): Promise<void> {
 
   // 3. Optionally load axe_surfaces from upstream findings.json
   let axeSurfaces: AxeSurface[] = [];
+  let axeFallback = false;
   const rawFindingsPath = path.join(runDir, 'findings.json');
   try {
     const rawText = await fs.readFile(rawFindingsPath, 'utf-8');
     const raw = JSON.parse(rawText) as RawRunJson;
     if (Array.isArray(raw.axe_surfaces) && raw.axe_surfaces.length > 0) {
       axeSurfaces = raw.axe_surfaces as AxeSurface[];
+    } else {
+      axeFallback = true;
     }
   } catch {
     // findings.json is optional; fallback to aggregation from deduped findings below
+    axeFallback = true;
   }
 
   const { meta, unanimous_findings, partial_findings, disagreements, stats, dispatch_errors } = run;
@@ -475,6 +479,12 @@ async function main(): Promise<void> {
   if (axeSurfaces.length === 0) {
     lines.push('No axe surfaces recorded.');
   } else {
+    if (axeFallback) {
+      lines.push(
+        '> Note: `axe_surfaces` not present in upstream `findings.json`; rendering per-step axe data instead.',
+        '',
+      );
+    }
     lines.push('| route | violations | top issue |');
     lines.push('|-------|------------|-----------|');
     for (const s of axeSurfaces) {
