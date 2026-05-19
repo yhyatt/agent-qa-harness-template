@@ -183,6 +183,7 @@ async function main(): Promise<void> {
       unanimous_findings: [],
       partial_findings: [],
       disagreements: [],
+      errored_findings: [],
       stats: {
         total_raw: 0,
         after_dedup: 0,
@@ -191,13 +192,14 @@ async function main(): Promise<void> {
           [...meta.models].sort().map((m) => [m, 0]),
         ),
         dispatch_error_count: dispatch_errors.length,
+        errored_finding_count: 0,
         ...(meta.models.length === 1 ? { warning: 'single-model run' } : {}),
       },
       dispatch_errors,
     };
     const outPath = path.join(runDir, 'findings.deduped.json');
     await fs.writeFile(outPath, stableStringify(emptyRun));
-    console.log('dedup: 0 findings into 0 unanimous, 0 partial, 0 disagreement; agreement 0%');
+    console.log('dedup: 0 findings into 0 unanimous, 0 partial, 0 disagreement, 0 errored; agreement 0%');
     return;
   }
 
@@ -241,6 +243,7 @@ async function main(): Promise<void> {
   const unanimous: DedupedFinding[] = [];
   const partial: DedupedFinding[] = [];
   const disagreements: DedupedFinding[] = [];
+  const errored: DedupedFinding[] = [];
 
   // Accumulate stats as we go
   let totalRaw = 0;
@@ -297,13 +300,14 @@ async function main(): Promise<void> {
 
     // Classify into bucket
     if (n === 0) {
-      // All models errored on this step. Not interesting but don't drop it.
-      // Mark with notes so consumers can identify these entries.
+      // All models errored on this step; no valid judgment exists.
+      // Not unanimous (there is no consensus to speak of). Moved to
+      // errored_findings so downstream consumers can surface it separately.
       const withNotes: DedupedFinding = {
         ...dedupedBase,
         notes: (finding.notes ? finding.notes + '; ' : '') + 'all model judgments errored',
       };
-      unanimous.push(withNotes);
+      errored.push(withNotes);
     } else if (n === 1 || failCount === 0 || failCount === n) {
       // Single-model run: unanimous by definition.
       // All agreed: either all pass or all fail.
@@ -335,21 +339,13 @@ async function main(): Promise<void> {
     });
   }
 
-  const unanimousSorted = attachCrossSeverityWarnings(
-    unanimous.sort((a, b) =>
-      a.dedup_key < b.dedup_key ? -1 : a.dedup_key > b.dedup_key ? 1 : a.step_id.localeCompare(b.step_id),
-    ),
-  );
-  const partialSorted = attachCrossSeverityWarnings(
-    partial.sort((a, b) =>
-      a.dedup_key < b.dedup_key ? -1 : a.dedup_key > b.dedup_key ? 1 : a.step_id.localeCompare(b.step_id),
-    ),
-  );
-  const disagreementsSorted = attachCrossSeverityWarnings(
-    disagreements.sort((a, b) =>
-      a.dedup_key < b.dedup_key ? -1 : a.dedup_key > b.dedup_key ? 1 : a.step_id.localeCompare(b.step_id),
-    ),
-  );
+  const sortByKey = (a: DedupedFinding, b: DedupedFinding) =>
+    a.dedup_key < b.dedup_key ? -1 : a.dedup_key > b.dedup_key ? 1 : a.step_id.localeCompare(b.step_id);
+
+  const unanimousSorted = attachCrossSeverityWarnings(unanimous.sort(sortByKey));
+  const partialSorted = attachCrossSeverityWarnings(partial.sort(sortByKey));
+  const disagreementsSorted = attachCrossSeverityWarnings(disagreements.sort(sortByKey));
+  const erroredSorted = attachCrossSeverityWarnings(errored.sort(sortByKey));
 
   // 6. Stats
   const agreementRate =
@@ -361,12 +357,17 @@ async function main(): Promise<void> {
     perModelCountsSorted[k] = perModelCounts[k]!;
   }
 
+  // after_dedup counts findings with at least one valid judgment (U + P + D).
+  // errored_findings are tracked separately in errored_finding_count.
+  const afterDedup = unanimousSorted.length + partialSorted.length + disagreementsSorted.length;
+
   const stats: DedupedRun['stats'] = {
     total_raw: totalRaw,
-    after_dedup: groupOrder.length,
+    after_dedup: afterDedup,
     agreement_rate: agreementRate,
     per_model_fail_counts: perModelCountsSorted,
     dispatch_error_count: dispatch_errors.length,
+    errored_finding_count: erroredSorted.length,
     ...(meta.models.length === 1 ? { warning: 'single-model run' } : {}),
   };
 
@@ -376,6 +377,7 @@ async function main(): Promise<void> {
     unanimous_findings: unanimousSorted,
     partial_findings: partialSorted,
     disagreements: disagreementsSorted,
+    errored_findings: erroredSorted,
     stats,
     dispatch_errors,
   };
@@ -387,9 +389,10 @@ async function main(): Promise<void> {
   const U = unanimousSorted.length;
   const P = partialSorted.length;
   const D = disagreementsSorted.length;
+  const E = erroredSorted.length;
   const pct = (agreementRate * 100).toFixed(2);
   console.log(
-    `dedup: ${groupOrder.length} findings into ${U} unanimous, ${P} partial, ${D} disagreement; agreement ${pct}%`,
+    `dedup: ${groupOrder.length} findings into ${U} unanimous, ${P} partial, ${D} disagreement, ${E} errored; agreement ${pct}%`,
   );
 }
 

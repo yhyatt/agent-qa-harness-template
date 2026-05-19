@@ -79,10 +79,19 @@ export interface DedupedRun {
   unanimous_findings: DedupedFinding[];
   partial_findings: DedupedFinding[];
   disagreements: DedupedFinding[];
+  /**
+   * Findings where every model dispatch errored (model_judgments is empty).
+   * Not unanimous; there is no consensus to speak of. Kept here so consumers
+   * can surface them rather than silently drop them.
+   */
+  errored_findings: DedupedFinding[];
   stats: {
     /** count of non-errored model_judgment entries across all findings. */
     total_raw: number;
-    /** count of DedupedFinding objects (equals the input finding count). */
+    /**
+     * count of DedupedFinding objects after grouping (unanimous + partial +
+     * disagreements only; errored_findings are not included).
+     */
     after_dedup: number;
     /** 0..1; share of (finding, model) pairs that agreed with majority. */
     agreement_rate: number;
@@ -90,6 +99,8 @@ export interface DedupedRun {
     per_model_fail_counts: Record<string, number>;
     /** pass-through from DispatchedRun. */
     dispatch_error_count: number;
+    /** count of findings where all model dispatches errored (no valid judgment). */
+    errored_finding_count: number;
     /** set to 'single-model run' when meta.models.length === 1. */
     warning?: string;
   };
