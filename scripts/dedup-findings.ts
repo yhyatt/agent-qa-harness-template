@@ -100,9 +100,11 @@ function normalizeTitle(t: string): string {
  * Computes a 12-char hex sha1 dedup key.
  *
  * The key uses the *input* finding's severity, not any model-adjusted severity.
- * Cross-severity divergence (model A says HIGH, model B says MEDIUM on the same
- * logical finding) is surfaced via cross_severity_warning rather than by merging
- * two separate dedup keys. See cross-severity collision detection below.
+ * v1 only uses the input finding's severity for the dedup key. Cross-severity
+ * detection across model_judgments[*].severity is not implemented for v1; the
+ * code path is alive for future use when StepFindings can render at multiple
+ * severities (e.g. if v2 lets the dispatcher elevate severity in its judgment,
+ * this is where the detection would land).
  */
 function dedupKey(
   journey_id: string,
