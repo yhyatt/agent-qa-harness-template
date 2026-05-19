@@ -83,6 +83,25 @@ function normalizeScreenshotPath(p: string | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// Markdown inline escape helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Escape user- or model-controlled strings before interpolating them into a
+ * markdown heading, bullet line, or table cell.
+ *
+ * Newlines break heading/bullet structure and allow heading injection.
+ * This helper collapses CR/LF runs to a single space, then trims.
+ * Apply this BEFORE the pipe-escape used in table cells.
+ *
+ * Note: multi-paragraph model judgments will appear as one line in bullet
+ * output. That is intentional — block-level injection is not allowed.
+ */
+function escapeMarkdownInline(s: string): string {
+  return s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// ---------------------------------------------------------------------------
 // Sentence helper
 // ---------------------------------------------------------------------------
 
@@ -120,17 +139,17 @@ function renderFindingBody(
   }
 
   lines.push(`- Step: ${f.step_id} (${f.journey_id})`);
-  lines.push(`- Action: ${f.action}`);
+  lines.push(`- Action: ${escapeMarkdownInline(f.action)}`);
   lines.push(`- Screenshot: ${normalizeScreenshotPath(f.screenshot_path)}`);
 
   if (f.console_errors.length > 0) {
-    lines.push(`- Console errors: ${f.console_errors.join('; ')}`);
+    lines.push(`- Console errors: ${f.console_errors.map(escapeMarkdownInline).join('; ')}`);
   } else {
     lines.push('- Console errors: none');
   }
 
   if (f.network_failures.length > 0) {
-    lines.push(`- Network failures: ${f.network_failures.join('; ')}`);
+    lines.push(`- Network failures: ${f.network_failures.map(escapeMarkdownInline).join('; ')}`);
   } else {
     lines.push('- Network failures: none');
   }
@@ -138,7 +157,7 @@ function renderFindingBody(
   const axeLabel =
     f.axe_violations < 0 ? 'scan failed' : `${f.axe_violations} violations`;
   const top3str =
-    f.axe_top3.length > 0 ? ` (${f.axe_top3.slice(0, 3).join(', ')})` : '';
+    f.axe_top3.length > 0 ? ` (${f.axe_top3.slice(0, 3).map(escapeMarkdownInline).join(', ')})` : '';
   lines.push(`- Axe: ${axeLabel}${top3str}`);
 
   // Consensus judgment: use first non-erroring model's judgment
@@ -146,7 +165,7 @@ function renderFindingBody(
   const firstOk = sortedModels.find((m) => !f.model_judgments[m]?.error);
   if (firstOk) {
     const j = f.model_judgments[firstOk]!;
-    lines.push(`- Consensus judgment: ${j.judgment} (${firstOk})`);
+    lines.push(`- Consensus judgment: ${escapeMarkdownInline(j.judgment)} (${firstOk})`);
   }
 
   if (opts.partial) {
@@ -165,7 +184,7 @@ function renderFindingBody(
     if (dissenters.length > 0) {
       for (const d of dissenters) {
         const dj = f.model_judgments[d]!;
-        lines.push(`- Dissenting model: ${d} | ${dj.judgment}`);
+        lines.push(`- Dissenting model: ${d} | ${escapeMarkdownInline(dj.judgment)}`);
       }
     }
 
@@ -181,9 +200,9 @@ function renderFindingBody(
 
 function renderDisagreementEntry(f: DedupedFinding): string[] {
   const lines: string[] = [];
-  lines.push('', `### ${f.severity}: ${f.title}`);
+  lines.push('', `### ${f.severity}: ${escapeMarkdownInline(f.title)}`);
   lines.push(`- Step: ${f.step_id} (${f.journey_id})`);
-  lines.push(`- Action: ${f.action}`);
+  lines.push(`- Action: ${escapeMarkdownInline(f.action)}`);
   lines.push(`- Screenshot: ${normalizeScreenshotPath(f.screenshot_path)}`);
 
   // Model verdicts table
@@ -194,7 +213,8 @@ function renderDisagreementEntry(f: DedupedFinding): string[] {
     const j = f.model_judgments[model]!;
     const passStr = j.error ? 'error' : j.pass ? 'yes' : 'no';
     const confStr = j.error ? 'n/a' : j.confidence.toFixed(2);
-    const judgSnippet = (j.error ? `error: ${j.error}` : firstSentence(j.judgment)).replace(/\|/g, '\\|');
+    const rawSnippet = j.error ? `error: ${j.error}` : firstSentence(j.judgment);
+    const judgSnippet = escapeMarkdownInline(rawSnippet).replace(/\|/g, '\\|');
     lines.push(`  | ${model} | ${passStr} | ${confStr} | ${judgSnippet} |`);
   }
 
@@ -203,9 +223,9 @@ function renderDisagreementEntry(f: DedupedFinding): string[] {
   for (const model of Object.keys(f.model_judgments).sort()) {
     const j = f.model_judgments[model]!;
     if (j.error) {
-      lines.push(`  - ${model}: error: ${j.error}`);
+      lines.push(`  - ${model}: error: ${escapeMarkdownInline(j.error)}`);
     } else {
-      lines.push(`  - ${model}: ${j.judgment}`);
+      lines.push(`  - ${model}: ${escapeMarkdownInline(j.judgment)}`);
     }
   }
 
@@ -248,10 +268,10 @@ function renderSeveritySection(
           : f.fail_count === f.total_count && f.total_count > 0
             ? ` (${f.total_count}/${f.total_count} models failed)`
             : ` (all pass)`;
-      lines.push(`- ${f.step_id}: ${f.title}${failInfo}`);
+      lines.push(`- ${f.step_id}: ${escapeMarkdownInline(f.title)}${failInfo}`);
     } else {
       const headLabel = partial ? `${f.severity} (N-1 dissent)` : f.severity;
-      lines.push('', `### ${headLabel}: ${f.title}`);
+      lines.push('', `### ${headLabel}: ${escapeMarkdownInline(f.title)}`);
       lines.push(...renderFindingBody(f, { partial, compact: false }));
     }
   }
@@ -459,8 +479,9 @@ async function main(): Promise<void> {
     lines.push('|-------|------------|-----------|');
     for (const s of axeSurfaces) {
       const violLabel = s.violations < 0 ? 'scan failed' : String(s.violations);
-      const topIssue = (s.top3.length > 0 ? (s.top3[0] ?? '') : 'none').replace(/\|/g, '\\|');
-      lines.push(`| ${s.route} | ${violLabel} | ${topIssue} |`);
+      const topIssue = escapeMarkdownInline(s.top3.length > 0 ? (s.top3[0] ?? '') : 'none').replace(/\|/g, '\\|');
+      const safeRoute = escapeMarkdownInline(s.route).replace(/\|/g, '\\|');
+      lines.push(`| ${safeRoute} | ${violLabel} | ${topIssue} |`);
     }
   }
 
@@ -486,7 +507,7 @@ async function main(): Promise<void> {
     lines.push(`- Dispatch errors: ${stats.dispatch_error_count}`);
     const firstFive = dispatch_errors.slice(0, 5);
     for (const e of firstFive) {
-      lines.push(`  - ${e.model}: ${e.step_id ?? 'matrix-level'}: ${e.message}`);
+      lines.push(`  - ${escapeMarkdownInline(e.model)}: ${escapeMarkdownInline(e.step_id ?? 'matrix-level')}: ${escapeMarkdownInline(e.message)}`);
     }
   } else {
     lines.push('- Dispatch errors: 0');
