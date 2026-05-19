@@ -52,10 +52,10 @@ The journey spec never imports an adapter directly. The helpers module does. Thi
 **Auth fixture capture:**
 
 ```ts
-// tests/e2e/adapters/nextjs-supabase.ts
+// tests/e2e/adapters/next-supabase.ts
 import { chromium } from '@playwright/test';
 
-export const nextjsSupabase: StackAdapter = {
+export const nextSupabase: StackAdapter = {
   async captureAuthState({ url, statePath, role }) {
     const browser = await chromium.launch({ headless: false });
     const ctx = await browser.newContext({
@@ -112,10 +112,10 @@ The shadow project lets destructive QA runs (delete sessions, clear state) not p
 Clerk's hosted UI changes URL paths frequently. The capture script should not hard-code the sign-in URL; instead, navigate to a protected route and let Clerk redirect to its own UI.
 
 ```ts
-// tests/e2e/adapters/nextjs-clerk.ts
+// tests/e2e/adapters/next-clerk.ts
 import { chromium } from '@playwright/test';
 
-export const nextjsClerk: StackAdapter = {
+export const nextClerk: StackAdapter = {
   async captureAuthState({ url, statePath, role }) {
     const browser = await chromium.launch({ headless: false });
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });

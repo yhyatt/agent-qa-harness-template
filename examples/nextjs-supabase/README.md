@@ -10,7 +10,7 @@ Reference materials in the interim:
 
 Once Ballpark slice-14 ships and the multi-model dispatch is wet-run validated, this directory will contain:
 
-- A concrete `tests/e2e/adapters/nextjs-supabase.ts` extracted from Ballpark
+- A concrete `tests/e2e/adapters/next-supabase.ts` extracted from Ballpark
 - A worked journey example (one of J1-J8) showing the full pattern with real assertions
 - The Hebrew-locale handling that Ballpark needs (RTL Tailwind logical properties note, bidi marks in numerals)
 - The shadow Supabase provisioning recipe Ballpark used
