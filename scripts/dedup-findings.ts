@@ -122,17 +122,44 @@ function dedupKey(
 }
 
 // ---------------------------------------------------------------------------
+// Run directory resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolves QA_RUN_DIR to an absolute path.
+ *
+ * Rules (applied in order):
+ *   1. Undefined or empty -> use findLatestRunDir().
+ *   2. Matches YYYY-MM-DD-HHmm exactly -> treat as run-id under .qa-runs/.
+ *   3. Contains '/' or '\', starts with '.' or '/' -> treat as path;
+ *      resolve relative paths against REPO_ROOT.
+ *   4. Otherwise -> treat as run-id under .qa-runs/ with a stderr note.
+ */
+async function resolveRunDir(raw: string | undefined): Promise<string> {
+  if (!raw) {
+    return findLatestRunDir();
+  }
+  if (RUN_DIR_PATTERN.test(raw)) {
+    return path.join(REPO_ROOT, '.qa-runs', raw);
+  }
+  if (raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || raw.startsWith('/')) {
+    return path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw);
+  }
+  // Unknown form: treat as run-id but warn
+  process.stderr.write(
+    `[dedup] QA_RUN_DIR="${raw}" does not look like a run-id (YYYY-MM-DD-HHmm) or a path. ` +
+      `Treating as run-id under .qa-runs/.\n`,
+  );
+  return path.join(REPO_ROOT, '.qa-runs', raw);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   // 1. Parse env
-  let runDir = process.env.QA_RUN_DIR ?? '';
-  if (!runDir) {
-    runDir = await findLatestRunDir();
-  } else if (!path.isAbsolute(runDir)) {
-    runDir = path.resolve(REPO_ROOT, runDir);
-  }
+  const runDir = await resolveRunDir(process.env.QA_RUN_DIR);
 
   // 2. Load input
   const inputPath = path.join(runDir, 'findings.dispatched.json');
