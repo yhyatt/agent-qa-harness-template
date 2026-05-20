@@ -1,4 +1,33 @@
 import { defineConfig, devices } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ---------------------------------------------------------------------------
+// Shared run ID across all worker processes.
+//
+// Without this, each Playwright project (chromium-desktop, mobile-iphone-13)
+// computes its own timestamp and lands findings in separate .qa-runs/<id>/
+// directories that the dispatcher cannot collate. Set once in the parent
+// process; workers inherit via env.
+// ---------------------------------------------------------------------------
+if (!process.env.QA_RUN_DIR) {
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  process.env.QA_RUN_DIR = stamp;
+}
+
+// Write .qa-runs/latest.txt so the dispatcher scripts can find the most recent
+// run without scanning and sorting the directory. Falls back to scan+sort if
+// the file is absent or unreadable.
+try {
+  const qaRunsDir = path.resolve(__dirname, '.qa-runs');
+  fs.mkdirSync(qaRunsDir, { recursive: true });
+  fs.writeFileSync(path.join(qaRunsDir, 'latest.txt'), process.env.QA_RUN_DIR, 'utf-8');
+} catch {
+  // Non-fatal: dispatcher scripts fall back to scan+sort.
+}
 
 /**
  * Playwright config for the journey harness.

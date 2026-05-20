@@ -26,6 +26,21 @@ const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
+
+  // Prefer the pointer written by playwright.config.ts at run time.
+  // Fall back to scan+sort if the file is absent or contains an invalid value.
+  const latestFile = path.join(base, 'latest.txt');
+  try {
+    const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
+    if (RUN_DIR_PATTERN.test(candidate)) {
+      const resolved = path.join(base, candidate);
+      await fs.stat(resolved);
+      return resolved;
+    }
+  } catch {
+    // File missing, unreadable, or points to a non-existent directory. Fall through.
+  }
+
   let entries: string[];
   try {
     entries = await fs.readdir(base);
