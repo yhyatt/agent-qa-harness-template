@@ -90,6 +90,25 @@ function printSizeSummary(stateFile: string): void {
   }
 }
 
+/**
+ * Returns true if the cookie should be included in the fixture for the given target host.
+ *
+ * Accepts:
+ *  - exact match (app.example.com matches app.example.com)
+ *  - parent-domain match: target = "app.example.com", cookie domain = ".example.com" or
+ *    "example.com" → keep. Auth providers like Supabase and Auth0 set cookies on the
+ *    parent domain so the session is shared across subdomains.
+ */
+function cookieAppliesToTarget(cookieDomain: string, targetHost: string): boolean {
+  // strip leading dot (browsers treat `.example.com` and `example.com` equivalently)
+  const d = cookieDomain.replace(/^\./, '');
+  // exact match
+  if (d === targetHost) return true;
+  // parent-domain match: target = "app.example.com", cookie = "example.com" → keep
+  if (targetHost === d || targetHost.endsWith('.' + d)) return true;
+  return false;
+}
+
 async function runCdpMode(): Promise<void> {
   let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>;
   try {
@@ -125,16 +144,13 @@ async function runCdpMode(): Promise<void> {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
 
     // CDP attaches to the user's real Chrome profile, which may have cookies for
-    // dozens of unrelated sites. Filter to the target origin only before writing.
+    // dozens of unrelated sites. Filter to the target host before writing.
+    // Includes parent-domain cookies (e.g. .example.com for app.example.com) because
+    // auth providers like Supabase and Auth0 set session cookies on the parent domain.
     const fullState = await targetCtx.storageState();
     const targetHost = new URL(TARGET).hostname;
     const filtered = {
-      cookies: fullState.cookies.filter(
-        (c) =>
-          c.domain === targetHost ||
-          c.domain === '.' + targetHost ||
-          c.domain.endsWith('.' + targetHost),
-      ),
+      cookies: fullState.cookies.filter((c) => cookieAppliesToTarget(c.domain, targetHost)),
       origins: fullState.origins.filter((o) => {
         try {
           return new URL(o.origin).hostname === targetHost;
@@ -146,7 +162,7 @@ async function runCdpMode(): Promise<void> {
     fs.writeFileSync(STATE_FILE, JSON.stringify(filtered, null, 2));
 
     process.stderr.write(
-      `CDP mode: filtered storageState to target host '${targetHost}'. ` +
+      `CDP mode: filtered storageState to target host '${targetHost}' (includes parent-domain cookies). ` +
         `Captured ${filtered.cookies.length} cookies and ${filtered.origins.length} origins.\n` +
         `If the fixture is empty, verify you are signed into the app in the running Chrome at ${CDP_URL}.\n`,
     );
