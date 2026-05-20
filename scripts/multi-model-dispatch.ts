@@ -65,13 +65,13 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
  * Resolves the run directory from the QA_RUN_DIR env value.
  *
  * Three forms are accepted:
- *  1. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  1. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
  *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
  *     if not already absolute.
  *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
  */
 function resolveRunDir(envValue: string): string {
-  const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+  const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
   const isPath =
     envValue.includes('/') ||
     envValue.includes('\\') ||
@@ -104,7 +104,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+    const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
     if (TIMESTAMP_RE.test(candidate)) {
       const resolved = path.join(base, candidate);
       // Verify the directory actually exists before trusting the pointer.
@@ -129,7 +129,7 @@ async function findLatestRunDir(): Promise<string> {
       `.qa-runs/ directory is empty. Run the Playwright harness first.`,
     );
   }
-  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HHmm) sorts correctly
+  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HH-MM) sorts correctly
   const sorted = entries.sort();
   return path.join(base, sorted[sorted.length - 1]!);
 }

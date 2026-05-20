@@ -22,7 +22,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 // Find latest run directory (copied from dedup-findings.ts; not exported there)
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -53,7 +53,7 @@ async function findLatestRunDir(): Promise<string> {
   const valid = entries.filter((e) => RUN_DIR_PATTERN.test(e));
   if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HHmm format).`,
+      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
     );
   }
   const sorted = valid.sort();
@@ -69,7 +69,7 @@ async function findLatestRunDir(): Promise<string> {
  *
  * Accepted forms (applied in order):
  *  1. Undefined or empty -> use findLatestRunDir().
- *  2. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  2. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
  *  3. Contains '/' or '\', starts with '.' or '/': treated as a path;
  *     relative paths resolved against REPO_ROOT.
  *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
@@ -87,7 +87,7 @@ async function resolveRunDir(raw: string | undefined): Promise<string> {
   // Bare name: treat as run-id but warn
   process.stderr.write(
     `[report] note: interpreting QA_RUN_DIR='${raw}' as a run id under .qa-runs/. ` +
-      `Pass a full path or YYYY-MM-DD-HHmm run-id to suppress this note.\n`,
+      `Pass a full path or YYYY-MM-DD-HH-MM run-id to suppress this note.\n`,
   );
   return path.join(REPO_ROOT, '.qa-runs', raw);
 }

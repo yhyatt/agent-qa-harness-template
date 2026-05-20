@@ -29,7 +29,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 // regex filter ensures only valid YYYY-MM-DD-HHmm entries are considered)
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -60,7 +60,7 @@ async function findLatestRunDir(): Promise<string> {
   const valid = entries.filter((e) => RUN_DIR_PATTERN.test(e));
   if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HHmm format).`,
+      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
     );
   }
   // Sort lexicographically; the timestamp format sorts correctly
