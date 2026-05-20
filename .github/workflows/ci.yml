@@ -7,6 +7,10 @@ name: ci
 
 on:
   pull_request:
+  push:
+    # Common default-branch names. Consumers should prune this to match their repo
+    # (or leave as-is; an unmatched branch is a no-op, not an error).
+    branches: [master, main, develop, trunk]
   workflow_dispatch:
 
 jobs:
