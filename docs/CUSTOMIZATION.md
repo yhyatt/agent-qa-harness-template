@@ -4,6 +4,8 @@ How to adapt the template for a specific stack. Two concrete worked examples bel
 
 The interactive `scripts/scaffold.sh` will eventually do most of these substitutions automatically. Today it is a stub; the patches below are the manual recipe.
 
+The scaffolder runs after you have chosen a consumption pattern. See `docs/CONSUMPTION-PATTERNS.md` for the three supported patterns and how to pick.
+
 ## What the scaffolder needs to know
 
 When you run `scripts/scaffold.sh` (or do the substitutions by hand), it asks:

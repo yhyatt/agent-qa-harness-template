@@ -21,6 +21,8 @@ Skip it if: single-user app with trivial journeys, pure backend service with no 
 
 ## 60-second quick start
 
+Three consumption patterns are supported in v1. See `docs/CONSUMPTION-PATTERNS.md` for the decision tree. The quick start below uses pattern A (sibling repo via `gh repo create --template`).
+
 ```bash
 # 1. Create a new repo from this template (one of the two paths)
 gh repo create my-app-qa --template yhyatt/agent-qa-harness-template --private --clone
@@ -67,6 +69,7 @@ A markdown report and screenshots land in `.qa-runs/<timestamp>/`.
 
 ## Doc map (read in this order)
 
+0. `docs/CONSUMPTION-PATTERNS.md` - decision tree for which of the three supported consumption patterns to use (sibling repo, local clone, fork). Start here if you are not sure which setup path to take.
 1. `docs/PHILOSOPHY.md` - why each pattern exists. The rationale, framed against real Ballpark bugs that the harness would have caught earlier.
 2. `docs/PATTERN-A-VS-B.md` - coordination decision tree. When a single coordinator agent driving multiple browser contexts is enough, when you need a separate agent per role.
 3. `docs/ANTI-PATTERNS.md` - common failure modes. Mostly about treating Playwright contexts wrong and writing flaky journey assertions.

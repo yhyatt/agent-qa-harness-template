@@ -1,18 +1,78 @@
 name: ci
 
-# Runs J4 (the static surface walk, no auth required) on every PR.
-# Heavier journeys and multi-model dispatch are not part of CI; they run
-# nightly or on-demand via a separate workflow once the consuming project
-# wires its secrets.
+# Template CI:
+#   - typecheck: always.
+#   - pipeline-smoke: always. Mock dispatch + dedup + report against the shipped
+#     fixture, verifies outputs exist and contain no em/en dashes.
+#   - static-journey: runs only when the repo variable TEST_TARGET_URL is set.
+#     In the template repo itself there's no live URL, so this job is skipped.
+#     Consuming projects set TEST_TARGET_URL (Settings -> Variables -> Actions)
+#     to enable J4 against their preview or staging URL.
 
 on:
   pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    # Common default-branch names. Consumers should prune to match their
+    # actual default. An unmatched branch is a no-op, not an error.
+    branches: [master, main, develop, trunk]
+  workflow_dispatch:
 
 jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
+
+  pipeline-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Mock dispatch + dedup + report against shipped fixture
+        env:
+          QA_RUN_DIR: tests/fixtures/dispatch-input
+          QA_MODELS: mock-a,mock-b,mock-c
+        run: |
+          npm run dispatch
+          npm run dedup
+          npm run report
+
+      - name: Verify pipeline outputs
+        run: |
+          test -f tests/fixtures/dispatch-input/findings.dispatched.json
+          test -f tests/fixtures/dispatch-input/findings.deduped.json
+          test -f tests/fixtures/dispatch-input/REPORT.final.md
+          # Style check: no em (U+2014) or en (U+2013) dashes in the rendered
+          # report. Match the literal characters, not a byte class.
+          if grep -P "[\x{2014}\x{2013}]" tests/fixtures/dispatch-input/REPORT.final.md; then
+            echo "FAIL: em or en dashes found in REPORT.final.md"
+            exit 1
+          fi
+
+      - name: Upload pipeline artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-smoke-${{ github.run_id }}
+          path: tests/fixtures/dispatch-input/findings*.json
+          if-no-files-found: ignore
+
   static-journey:
+    # Skipped in the template repo (no TEST_TARGET_URL set). Consumers that
+    # set the variable get the J4 run as part of every PR; this is the
+    # example workflow that AGENTS.md "Run by default" principle refers to.
+    if: vars.TEST_TARGET_URL != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,22 +82,14 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Install Playwright chromium and webkit (J4 uses both via the mobile project)
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Run J4 (static surface walk)
         env:
-          # SCAFFOLDER: set this to the consuming app's preview or production URL.
-          # In a real consuming project, this typically comes from a Vercel preview
-          # or a GitHub Actions output from an earlier deploy step.
-          # SCAFFOLDER: replace the default TEST_TARGET_URL value below with the consuming app's URL
-          TEST_TARGET_URL: ${{ vars.TEST_TARGET_URL || 'http://localhost:3000' }}
+          TEST_TARGET_URL: ${{ vars.TEST_TARGET_URL }}
         run: npm run test:e2e -- --grep "J4"
 
       - name: Upload QA run artifacts
