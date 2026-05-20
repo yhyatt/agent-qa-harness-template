@@ -48,16 +48,18 @@ async function findLatestRunDir(): Promise<string> {
     // File missing, unreadable, or points to a non-existent directory. Fall through.
   }
 
-  let entries: string[];
+  let rawEntries: import('node:fs').Dirent[];
   try {
-    entries = await fs.readdir(base);
+    rawEntries = await fs.readdir(base, { withFileTypes: true });
   } catch {
     throw new Error(
       `No .qa-runs/ directory found at ${base}. ` +
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  const valid = entries.filter((e) => RUN_DIR_PATTERN.test(e));
+  const valid = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+    .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(
       `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,

@@ -116,9 +116,9 @@ async function findLatestRunDir(): Promise<string> {
     // File missing, unreadable, or points to a non-existent directory. Fall through.
   }
 
-  let entries: string[];
+  let rawEntries: import('node:fs').Dirent[];
   try {
-    entries = await fs.readdir(base);
+    rawEntries = await fs.readdir(base, { withFileTypes: true });
   } catch {
     throw new Error(
       `No .qa-runs/ directory found at ${base}. ` +
@@ -127,7 +127,10 @@ async function findLatestRunDir(): Promise<string> {
   }
   // Filter to valid timestamp dirs only; .qa-runs/ also contains latest.txt and
   // playwright-output/, both of which sort after digit-based timestamps.
-  const valid = entries.filter((e) => RUN_DIR_PATTERN.test(e));
+  // Use withFileTypes to also exclude non-directory entries like latest.txt.
+  const valid = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+    .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(
       `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
