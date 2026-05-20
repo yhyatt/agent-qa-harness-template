@@ -1,10 +1,13 @@
 name: ci
 
-# Template CI: verifies the harness itself stays buildable and the
-# dispatch -> dedup -> report pipeline runs end-to-end against a mock
-# provider. Does NOT run live journeys (no real TEST_TARGET_URL exists
-# in the template repo). Consuming projects scaffold their own CI that
-# runs J4 against their actual preview URL.
+# Template CI:
+#   - typecheck: always.
+#   - pipeline-smoke: always. Mock dispatch + dedup + report against the shipped
+#     fixture, verifies outputs exist and contain no em/en dashes.
+#   - static-journey: runs only when the repo variable TEST_TARGET_URL is set.
+#     In the template repo itself there's no live URL, so this job is skipped.
+#     Consuming projects set TEST_TARGET_URL (Settings -> Variables -> Actions)
+#     to enable J4 against their preview or staging URL.
 
 on:
   pull_request:
@@ -50,8 +53,9 @@ jobs:
           test -f tests/fixtures/dispatch-input/findings.dispatched.json
           test -f tests/fixtures/dispatch-input/findings.deduped.json
           test -f tests/fixtures/dispatch-input/REPORT.final.md
-          # Style check: no em or en dashes in the rendered report.
-          if grep -P "[\xe2\x80\x94\xe2\x80\x93]" tests/fixtures/dispatch-input/REPORT.final.md; then
+          # Style check: no em (U+2014) or en (U+2013) dashes in the rendered
+          # report. Match the literal characters, not a byte class.
+          if grep -P "[\x{2014}\x{2013}]" tests/fixtures/dispatch-input/REPORT.final.md; then
             echo "FAIL: em or en dashes found in REPORT.final.md"
             exit 1
           fi
@@ -62,4 +66,36 @@ jobs:
         with:
           name: pipeline-smoke-${{ github.run_id }}
           path: tests/fixtures/dispatch-input/findings*.json
+          if-no-files-found: ignore
+
+  static-journey:
+    # Skipped in the template repo (no TEST_TARGET_URL set). Consumers that
+    # set the variable get the J4 run as part of every PR; this is the
+    # example workflow that AGENTS.md "Run by default" principle refers to.
+    if: vars.TEST_TARGET_URL != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Install Playwright chromium and webkit (J4 uses both via the mobile project)
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Run J4 (static surface walk)
+        env:
+          TEST_TARGET_URL: ${{ vars.TEST_TARGET_URL }}
+        run: npm run test:e2e -- --grep "J4"
+
+      - name: Upload QA run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-run-${{ github.run_id }}
+          path: .qa-runs/
           if-no-files-found: ignore
