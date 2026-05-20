@@ -87,8 +87,8 @@ Fork `yhyatt/agent-qa-harness-template` on GitHub, then add the upstream remote 
 ```bash
 # 1. Fork via GitHub UI: https://github.com/yhyatt/agent-qa-harness-template -> Fork
 
-# 2. Clone your fork
-gh repo clone your-username/agent-qa-harness-template ~/projects/my-app-qa
+# 2. Clone your fork (replace <your-fork-name> with the exact name you gave the fork at fork time)
+gh repo clone <your-fork-name> ~/projects/my-app-qa
 cd ~/projects/my-app-qa
 
 # 3. Add the upstream remote so you can pull improvements later
