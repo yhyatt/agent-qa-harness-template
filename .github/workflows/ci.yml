@@ -1,51 +1,65 @@
 name: ci
 
-# Runs J4 (the static surface walk, no auth required) on every PR.
-# Heavier journeys and multi-model dispatch are not part of CI; they run
-# nightly or on-demand via a separate workflow once the consuming project
-# wires its secrets.
+# Template CI: verifies the harness itself stays buildable and the
+# dispatch -> dedup -> report pipeline runs end-to-end against a mock
+# provider. Does NOT run live journeys (no real TEST_TARGET_URL exists
+# in the template repo). Consuming projects scaffold their own CI that
+# runs J4 against their actual preview URL.
 
 on:
   pull_request:
   push:
-    # Common default-branch names. Consumers should prune this to match their repo
-    # (or leave as-is; an unmatched branch is a no-op, not an error).
+    # Common default-branch names. Consumers should prune to match their
+    # actual default. An unmatched branch is a no-op, not an error.
     branches: [master, main, develop, trunk]
   workflow_dispatch:
 
 jobs:
-  static-journey:
+  typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+      - run: npm ci
+      - run: npm run typecheck
 
-      - name: Install dependencies
-        run: npm ci
+  pipeline-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Run J4 (static surface walk)
+      - name: Mock dispatch + dedup + report against shipped fixture
         env:
-          # SCAFFOLDER: set this to the consuming app's preview or production URL.
-          # In a real consuming project, this typically comes from a Vercel preview
-          # or a GitHub Actions output from an earlier deploy step.
-          # SCAFFOLDER: replace the default TEST_TARGET_URL value below with the consuming app's URL
-          TEST_TARGET_URL: ${{ vars.TEST_TARGET_URL || 'http://localhost:3000' }}
-        run: npm run test:e2e -- --grep "J4"
+          QA_RUN_DIR: tests/fixtures/dispatch-input
+          QA_MODELS: mock-a,mock-b,mock-c
+        run: |
+          npm run dispatch
+          npm run dedup
+          npm run report
 
-      - name: Upload QA run artifacts
+      - name: Verify pipeline outputs
+        run: |
+          test -f tests/fixtures/dispatch-input/findings.dispatched.json
+          test -f tests/fixtures/dispatch-input/findings.deduped.json
+          test -f tests/fixtures/dispatch-input/REPORT.final.md
+          # Style check: no em or en dashes in the rendered report.
+          if grep -P "[\xe2\x80\x94\xe2\x80\x93]" tests/fixtures/dispatch-input/REPORT.final.md; then
+            echo "FAIL: em or en dashes found in REPORT.final.md"
+            exit 1
+          fi
+
+      - name: Upload pipeline artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qa-run-${{ github.run_id }}
-          path: .qa-runs/
+          name: pipeline-smoke-${{ github.run_id }}
+          path: tests/fixtures/dispatch-input/findings*.json
           if-no-files-found: ignore
