@@ -148,7 +148,8 @@ Make the decision visible before proceeding. If the user says anything other tha
    - npm install
    - npm run populate-auth
    - TEST_TARGET_URL=https://your-app.vercel.app npm run test:e2e -- --grep "J4"
-   - To pull upstream harness improvements later: git fetch upstream && git merge upstream/master
+   - To pull upstream harness improvements later: git pull upstream HEAD
+     (uses the upstream's default branch automatically; works whether it is master, main, or anything else)
 8. Ask if they want to start authoring J1 now.
 ```
 
