@@ -116,7 +116,12 @@ async function runCdpMode(): Promise<void> {
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     console.error(`cannot connect to Chrome at ${CDP_URL}: ${reason}`);
-    console.error('Start Chrome with: google-chrome --remote-debugging-port=9222');
+    console.error(
+      'Start Chrome with: google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile',
+    );
+    console.error(
+      'On Chrome 136+, --remote-debugging-port is ignored on the default profile; the --user-data-dir flag is required.',
+    );
     process.exit(1);
   }
 
