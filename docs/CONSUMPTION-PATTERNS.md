@@ -87,12 +87,15 @@ Fork `yhyatt/agent-qa-harness-template` on GitHub, then add the upstream remote 
 ```bash
 # 1. Fork via GitHub UI: https://github.com/yhyatt/agent-qa-harness-template -> Fork
 
-# 2. Clone your fork (replace <your-fork-name> with the exact name you gave the fork at fork time)
-gh repo clone <your-fork-name> ~/projects/my-app-qa
+# 2. Clone your fork using the FULL OWNER/REPO slug. Without OWNER/, gh
+#    defaults to your personal account, which is wrong if you forked into
+#    an organization.
+gh repo clone <owner>/<your-fork-name> ~/projects/my-app-qa
 cd ~/projects/my-app-qa
 
-# 3. Add the upstream remote so you can pull improvements later
-git remote add upstream https://github.com/yhyatt/agent-qa-harness-template.git
+# 3. gh repo clone on a fork already adds the parent repo as the `upstream`
+#    remote by default, so no manual `git remote add upstream` is needed.
+#    Verify with: git remote -v
 
 # 4. Run the scaffolder
 ./scripts/scaffold.sh

@@ -136,13 +136,20 @@ Make the decision visible before proceeding. If the user says anything other tha
 ```
 1. Instruct the user to fork via GitHub UI:
    https://github.com/yhyatt/agent-qa-harness-template -> Fork button
-   Wait for user to confirm they have forked AND to tell you the exact fork repo name
-   (forks can be renamed at fork time; do not assume the name matches the template).
-2. Confirm the target dir. Default: ~/projects/<fork-repo-name>.
-3. Run: gh repo clone <fork-repo-name-from-step-1> <dir>
-   Use the EXACT name the user provided, not a guessed value.
+   Wait for user to confirm they have forked AND to tell you the FULL fork slug
+   in the form OWNER/REPO (e.g. acme/agent-qa-harness-template, or yhyatt/qa-fork
+   if renamed at fork time). Forks can be created under an organization or
+   renamed; never assume OWNER matches the user's personal account or that
+   REPO matches the template name.
+2. Confirm the target dir. Default: ~/projects/<repo-portion-of-slug>.
+3. Run: gh repo clone <owner>/<fork-repo-name-from-step-1> <dir>
+   Use the EXACT OWNER/REPO slug the user provided. Without OWNER/, gh
+   defaults to the authenticated user's account.
 4. cd <dir>
-5. Run: git remote add upstream https://github.com/yhyatt/agent-qa-harness-template.git
+5. gh repo clone already adds the parent repo as the `upstream` remote by
+   default. Do NOT run `git remote add upstream ...`; it errors out with
+   "remote upstream already exists". Verify the remote is set with
+   `git remote -v` and proceed.
 6. Run: ./scripts/scaffold.sh
 7. Print checklist:
    - npm install
