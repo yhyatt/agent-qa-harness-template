@@ -14,7 +14,7 @@
  *      to a real user. Use for auth flows that benefit from a returning-user
  *      profile. Less reliable than CDP for Google/Microsoft OAuth.
  *
- *   3. CDP attach (QA_AUTH_CDP=1)  -- recommended for OAuth
+ *   3. CDP attach (QA_AUTH_CDP=1)  (recommended for OAuth)
  *      Connects to the user's already-running real Chrome via Chrome DevTools
  *      Protocol. Real Chrome is not flagged as automated. Sign into the app
  *      normally, then run populate-auth; it attaches, finds the session, saves
