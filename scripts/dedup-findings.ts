@@ -25,8 +25,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
-// Find latest run directory (mirrors multi-model-dispatch.ts with R-nit-2 fix:
-// regex filter ensures only valid YYYY-MM-DD-HHmm entries are considered)
+// Find latest run directory (mirrors multi-model-dispatch.ts:
+// regex filter ensures only valid YYYY-MM-DD-HH-MM entries are considered)
 // ---------------------------------------------------------------------------
 
 const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;

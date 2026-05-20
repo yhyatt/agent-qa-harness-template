@@ -61,6 +61,8 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
 // Find latest run directory / resolve QA_RUN_DIR
 // ---------------------------------------------------------------------------
 
+const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+
 /**
  * Resolves the run directory from the QA_RUN_DIR env value.
  *
@@ -71,7 +73,7 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
  *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
  */
 function resolveRunDir(envValue: string): string {
-  const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+  const TIMESTAMP_RE = RUN_DIR_PATTERN;
   const isPath =
     envValue.includes('/') ||
     envValue.includes('\\') ||
@@ -104,8 +106,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
-    if (TIMESTAMP_RE.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate)) {
       const resolved = path.join(base, candidate);
       // Verify the directory actually exists before trusting the pointer.
       await fs.stat(resolved);
@@ -124,13 +125,16 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  if (entries.length === 0) {
+  // Filter to valid timestamp dirs only; .qa-runs/ also contains latest.txt and
+  // playwright-output/, both of which sort after digit-based timestamps.
+  const valid = entries.filter((e) => RUN_DIR_PATTERN.test(e));
+  if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ directory is empty. Run the Playwright harness first.`,
+      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
     );
   }
   // Sort lexicographically; the timestamp format (YYYY-MM-DD-HH-MM) sorts correctly
-  const sorted = entries.sort();
+  const sorted = valid.sort();
   return path.join(base, sorted[sorted.length - 1]!);
 }
 
