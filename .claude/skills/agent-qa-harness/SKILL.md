@@ -65,9 +65,9 @@ Pattern A only:
 
 ## Failure modes
 
-- **`gh repo create` errors with "repo already exists":** ask the user for a different name or to delete the existing repo. Applies to patterns A and C.
+- **`gh repo create` errors with "repo already exists":** ask the user for a different name or to delete the existing repo. Applies to pattern A only (pattern C forks via UI and does not call `gh repo create`).
 - **`scaffold.sh` errors on unknown framework:** the script supports Next.js, SvelteKit, Astro, Nuxt today. If the user has another framework, write the adapter manually following `docs/CUSTOMIZATION.md`.
-- **Template repo not yet public:** during early bootstrapping, the template repo may be private. Set `--template` to a fork the user has access to. For patterns B and D, use `git clone` with credentials or a local path instead.
+- **Template repo not yet public:** during early bootstrapping, the template repo may be private. Set `--template` to a fork the user has access to. For pattern B, use `git clone` with credentials or a local path instead.
 - **Pattern C: merge conflict on upstream pull:** conflicts most likely in `playwright.config.ts` and `scripts/scaffold.sh`. The adapter files under `tests/e2e/adapters/` are generated locally by the scaffolder and do not exist in the upstream template, so they will not conflict.
 
 ## Skill invocation flow (what the agent should do step by step)
@@ -136,9 +136,11 @@ Make the decision visible before proceeding. If the user says anything other tha
 ```
 1. Instruct the user to fork via GitHub UI:
    https://github.com/yhyatt/agent-qa-harness-template -> Fork button
-   Wait for user to confirm they have forked.
-2. Confirm the fork repo name (usually the same as the template).
-3. Run: gh repo clone <their-username>/agent-qa-harness-template <dir>
+   Wait for user to confirm they have forked AND to tell you the exact fork repo name
+   (forks can be renamed at fork time; do not assume the name matches the template).
+2. Confirm the target dir. Default: ~/projects/<fork-repo-name>.
+3. Run: gh repo clone <fork-repo-name-from-step-1> <dir>
+   Use the EXACT name the user provided, not a guessed value.
 4. cd <dir>
 5. Run: git remote add upstream https://github.com/yhyatt/agent-qa-harness-template.git
 6. Run: ./scripts/scaffold.sh
