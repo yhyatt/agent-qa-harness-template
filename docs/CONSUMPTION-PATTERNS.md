@@ -1,8 +1,8 @@
 # Consumption Patterns
 
-How to use this template in a consuming project. Four patterns are supported today; pick by use case.
+How to use this template in a consuming project. Three patterns are supported in v1; pick by use case.
 
-Note on naming: "pattern A/B/C/D" here refers to how you consume this template (where the harness lives). The "Pattern A vs B" in `PATTERN-A-VS-B.md` is a separate concept about multi-agent coordination within journeys. The two naming schemes do not interact.
+Note on naming: "pattern A/B/C" here refers to how you consume this template (where the harness lives). The "Pattern A vs B" in `PATTERN-A-VS-B.md` is a separate concept about multi-agent coordination within journeys. The two naming schemes do not interact.
 
 ## Decision tree
 
@@ -13,7 +13,6 @@ If you can answer "yes" to any of these, the pattern in the same row is your def
 | Is the tested app a project where you want QA findings in their own commit history, separate from app code? | A. Sibling repo via `gh repo create --template` |
 | Are you experimenting or running an internal-only one-off? | B. Local clone, no GitHub remote |
 | Do you want to pull upstream harness improvements via `git pull upstream master`? | C. Fork via GitHub UI |
-| Does the tested app NOT already have a `tests/e2e/` directory, and do you want a single-repo workflow? | D. In-repo subdirectory |
 
 If multiple rows apply, the one earlier in the table usually wins.
 
@@ -25,13 +24,14 @@ A new GitHub repository created from this template. The QA repo lives next to th
 
 ```bash
 # Create the new repo from the template
+# gh repo create --clone places the repo in the current directory; cd to the parent first
+cd ~/projects
 gh repo create my-app-qa \
   --template yhyatt/agent-qa-harness-template \
   --private \
-  --clone \
-  --clone-dir ~/projects/my-app-qa
+  --clone
 
-cd ~/projects/my-app-qa
+cd my-app-qa
 
 # Run the interactive scaffolder
 ./scripts/scaffold.sh
@@ -76,7 +76,7 @@ TEST_TARGET_URL=https://my-app.vercel.app npm run test:e2e -- --grep "J4"
 
 **Caveats:** no CI, no shared visibility, no history. The `.qa-runs/` directory is gitignored; findings accumulate locally and vanish when you delete the directory. Anyone else on the team cannot see the run results.
 
-**When to skip B:** anything past a one-off exploration. Once you decide to keep the harness, migrate to A or D.
+**When to skip B:** anything past a one-off exploration. Once you decide to keep the harness, migrate to A or C.
 
 ## Pattern C: Fork via GitHub UI
 
@@ -114,51 +114,13 @@ The files most likely to conflict are `playwright.config.ts`, `scripts/scaffold.
 
 **When to skip C:** if you will never want upstream changes, just use A. A gives you a clean repo without the overhead of managing an upstream remote.
 
-## Pattern D: In-Repo Subdirectory
+## Pattern D: In-Repo Subdirectory (not yet supported in v1)
 
-Copy harness files into a `qa/` subdirectory of the tested app's repo. The harness and the app code live in the same git history.
+Copying the harness into a subdirectory of the tested app (single-repo workflow) is on the BACKLOG but not validated end-to-end. The current scaffolder assumes a fresh repo and edits `README.md` and `.github/workflows/ci.yml` unconditionally; running it in a subdirectory of an existing app will either fail or clobber files.
 
-**Pre-condition:** the tested app does NOT already have a `tests/e2e/` directory at its root. If it does, the copy step below will conflict. Use A or B instead, or place the harness under a different subdirectory name (e.g. `harness/`) and update the `rootDir` in the copied `playwright.config.ts` accordingly.
+If you want this pattern, file an issue describing your stack and we will work out the right boundary (separate `qa/package.json`, scaffolder flags, etc).
 
-**Setup:**
-
-```bash
-# Clone the template into a temp directory
-git clone --depth 1 https://github.com/yhyatt/agent-qa-harness-template /tmp/qa-template
-
-# Copy the harness files into the tested app under qa/
-cd ~/projects/my-app
-mkdir -p qa
-cp -r /tmp/qa-template/scripts qa/
-cp -r /tmp/qa-template/tests qa/
-cp -r /tmp/qa-template/docs qa/
-cp /tmp/qa-template/playwright.config.ts qa/
-cp /tmp/qa-template/tsconfig.json qa/tsconfig.qa.json
-
-# Clean up
-rm -rf /tmp/qa-template
-
-# Add harness dev dependencies to the app's package.json (merge manually)
-# Key deps: @playwright/test, @axe-core/playwright, @anthropic-ai/sdk, zod
-# Check qa/package.json from the template for the full list
-
-# Run the scaffolder
-cd qa
-./scripts/scaffold.sh
-
-npm install
-npm run populate-auth
-TEST_TARGET_URL=https://my-app.vercel.app npm run test:e2e -- --grep "J4"
-```
-
-**Tradeoffs:**
-
-- Tests next to code: tighter inner loop, one git log, one CI workflow.
-- Shared `package.json`: the harness's Playwright and axe-core deps land in the tested app's `node_modules`. For an app that already has Playwright as a dev dep, this is fine. For one that does not, watch the install size.
-- Single repo: PR comments and harness findings appear in the same repo as the app PR they cover.
-- No reusability: if you apply the harness to a second project later, you are cherry-picking from the first rather than cloning a template.
-
-**When to use D:** single-consumer projects where harness reusability is not a near-term concern AND the tested app does not already have a conflicting `tests/e2e/` directory.
+For now: pick A, B, or C.
 
 ## Future Patterns (Not Yet Supported, on the Backlog)
 
@@ -169,4 +131,4 @@ If you would benefit from either, file an issue on the template repo.
 
 ## Migration Between Patterns
 
-Once a project is using pattern A (sibling), moving to D (in-repo) is a copy-and-reconcile job: not destructive but takes roughly half a day. Moving from D to A is just a fresh template clone and re-authoring of journeys; the harness scripts do not carry state between checkouts. There is no migration tooling because each move is small enough to do by hand.
+Moving from B (local clone) to A (sibling repo) is a fresh `gh repo create --template` and re-authoring of journeys; the harness scripts do not carry state between checkouts. Moving from A to C is a fork of the existing sibling repo and adding an upstream remote. There is no migration tooling because each move is small enough to do by hand.
