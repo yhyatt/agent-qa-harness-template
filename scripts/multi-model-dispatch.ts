@@ -7,7 +7,7 @@
  *
  * Env vars:
  *   QA_RUN_DIR              path to the .qa-runs/<run> directory (default: latest under .qa-runs/)
- *   QA_MODELS               comma-separated model list (default: claude-sonnet-4-6,google/gemini-2.5-pro,openai/gpt-5)
+ *   QA_MODELS               comma-separated model list (default: claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5)
  *   QA_DISPATCH_CONCURRENCY parallelism cap per provider family (default: 4)
  *   MOCK_DISPATCH           set to 1 to use the mock provider for all models
  *   QA_ALLOW_SINGLE_FAMILY  set to 1 to bypass ADR-002 single-family check (for testing)
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const modelList =
-    process.env.QA_MODELS ?? 'claude-sonnet-4-6,google/gemini-2.5-pro,openai/gpt-5';
+    process.env.QA_MODELS ?? 'claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5';
   const models = modelList.split(',').map((m) => m.trim()).filter(Boolean);
 
   const runDirEnv = process.env.QA_RUN_DIR;
