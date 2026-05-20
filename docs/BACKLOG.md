@@ -27,7 +27,7 @@ Deferred nits from Opus review (2026-05-19):
 ## Slice 5: Ballpark wet run
 
 - **Shadow Supabase project**. Ballpark BACKLOG line 123 already tracks this. Yonatan provisions a separate free-tier `ballpark-qa` Supabase project before the Vercel-preview leg of the wet run.
-- **OAuth captcha on populate-auth**. Fresh Chromium triggers Google captcha. v1.1 patch: optional `chromium.launchPersistentContext('.qa-runs/userDataDir/')` when `QA_AUTH_PERSIST=1`. For the first wet run, accept the manual-captcha cost.
+- **OAuth auth capture**: resolved in fix/oauth-cdp-and-shared-run-id. QA_AUTH_PERSIST and QA_AUTH_CDP modes shipped.
 
 ## v1.1 and beyond
 
@@ -36,5 +36,6 @@ Deferred nits from Opus review (2026-05-19):
 - **CI auth fixture handling**. Today the CI workflow only runs J4 (no auth needed). Auth-gated journeys need a way to consume a CI-friendly auth fixture. Pattern: `secrets.QA_AUTH_FIXTURE` as base64-encoded JSON, decoded at job start, written to `tests/e2e/fixtures/host-auth.json`. Not yet wired.
 - **Journey IDs across forks**. If two consuming projects diverge their journey catalogs, the dedup tooling may need to track repo origin. Open question.
 - **WebKit and Firefox in the default matrix**. Playwright config currently includes Chromium and iPhone-13 (WebKit-Mobile). Adding Firefox doubles run time. Deferred decision.
-- **Persistent userDataDir for `populate-auth.ts`** (see Slice 5 above; promoted to v1.1).
+- **Persistent userDataDir for `populate-auth.ts`**: shipped in fix/oauth-cdp-and-shared-run-id.
+- **Supabase admin-API seed for auth fixtures**. Bypasses any UI auth entirely by directly creating a session via the Supabase admin client. Adapter-level (Supabase only). Would let CI runs avoid the CDP/headed-browser dance entirely. Defer until a consuming project wants it.
 - **`docs/JOURNEY-CATALOG-GUIDE.md` examples** drawn from the Ballpark wet run. Currently abstract.

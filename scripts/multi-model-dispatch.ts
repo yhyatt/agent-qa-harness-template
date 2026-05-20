@@ -61,17 +61,19 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
 // Find latest run directory / resolve QA_RUN_DIR
 // ---------------------------------------------------------------------------
 
+const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+
 /**
  * Resolves the run directory from the QA_RUN_DIR env value.
  *
  * Three forms are accepted:
- *  1. Timestamp run-id (YYYY-MM-DD-HHmm): resolved under .qa-runs/.
+ *  1. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
  *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
  *     if not already absolute.
  *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
  */
 function resolveRunDir(envValue: string): string {
-  const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+  const TIMESTAMP_RE = RUN_DIR_PATTERN;
   const isPath =
     envValue.includes('/') ||
     envValue.includes('\\') ||
@@ -98,22 +100,44 @@ function resolveRunDir(envValue: string): string {
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
-  let entries: string[];
+
+  // Prefer the pointer written by playwright.config.ts at run time.
+  // Fall back to scan+sort if the file is absent or contains an invalid value.
+  const latestFile = path.join(base, 'latest.txt');
   try {
-    entries = await fs.readdir(base);
+    const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
+    if (RUN_DIR_PATTERN.test(candidate)) {
+      const resolved = path.join(base, candidate);
+      // Verify the directory actually exists before trusting the pointer.
+      await fs.stat(resolved);
+      return resolved;
+    }
+  } catch {
+    // File missing, unreadable, or points to a non-existent directory. Fall through.
+  }
+
+  let rawEntries: import('node:fs').Dirent[];
+  try {
+    rawEntries = await fs.readdir(base, { withFileTypes: true });
   } catch {
     throw new Error(
       `No .qa-runs/ directory found at ${base}. ` +
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  if (entries.length === 0) {
+  // Filter to valid timestamp dirs only; .qa-runs/ also contains latest.txt and
+  // playwright-output/, both of which sort after digit-based timestamps.
+  // Use withFileTypes to also exclude non-directory entries like latest.txt.
+  const valid = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+    .map((e) => e.name);
+  if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ directory is empty. Run the Playwright harness first.`,
+      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
     );
   }
-  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HHmm) sorts correctly
-  const sorted = entries.sort();
+  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HH-MM) sorts correctly
+  const sorted = valid.sort();
   return path.join(base, sorted[sorted.length - 1]!);
 }
 

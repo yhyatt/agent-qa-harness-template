@@ -233,3 +233,38 @@ If you already have Playwright tests, the migration is:
 5. Wire the helpers (`screenshot`, `attachListeners`, `runAxe`, `writeReport`)
 
 Most tests port over in under an hour each.
+
+## Capturing the auth fixture
+
+`scripts/populate-auth.ts` supports three modes for capturing `tests/e2e/fixtures/host-auth.json`:
+
+| Mode | When to use | Trigger |
+|---|---|---|
+| Ephemeral | Email/password, magic-link, or any auth that does not trigger anti-bot detection. | `npm run populate-auth` (default) |
+| Persistent | Auth flows that benefit from a returning-user profile (cookies, localStorage carrying across runs). | `QA_AUTH_PERSIST=1 npm run populate-auth` |
+| CDP attach (recommended for OAuth) | Google, Microsoft, GitHub, or any OAuth provider that flags Playwright's bundled Chromium as automated. The Playwright Chromium triggers Google bot detection silently; the fix is to use your real Chrome browser. | (see below) |
+
+### CDP attach mode
+
+1. Start your normal Chrome with remote debugging:
+
+   ```bash
+   # Linux / WSL
+   google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile &
+   # macOS
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile &
+   ```
+
+   The `--user-data-dir` flag is required on Chrome 136 and later (it's ignored on the default profile). The /tmp path also isolates QA cookies from your normal browsing profile.
+
+2. In that Chrome, sign into your app normally.
+
+3. From the QA repo:
+
+   ```bash
+   QA_AUTH_CDP=1 TEST_TARGET_URL=https://my-app.com npm run populate-auth
+   ```
+
+   populate-auth attaches via CDP, finds the BrowserContext on your target URL, captures storageState, and exits. Chrome stays open.
+
+4. Verify the fixture is real: `wc -c tests/e2e/fixtures/host-auth.json` should be > 1KB.
