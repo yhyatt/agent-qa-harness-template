@@ -21,6 +21,8 @@ Skip it if: single-user app with trivial journeys, pure backend service with no 
 
 ## 60-second quick start
 
+Four consumption patterns are supported. See `docs/CONSUMPTION-PATTERNS.md` for the decision tree. The quick start below uses pattern A (sibling repo via `gh repo create --template`).
+
 ```bash
 # 1. Create a new repo from this template (one of the two paths)
 gh repo create my-app-qa --template yhyatt/agent-qa-harness-template --private --clone
