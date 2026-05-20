@@ -250,10 +250,12 @@ Most tests port over in under an hour each.
 
    ```bash
    # Linux / WSL
-   google-chrome --remote-debugging-port=9222 &
+   google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile &
    # macOS
-   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 &
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile &
    ```
+
+   The `--user-data-dir` flag is required on Chrome 136 and later (it's ignored on the default profile). The /tmp path also isolates QA cookies from your normal browsing profile.
 
 2. In that Chrome, sign into your app normally.
 
