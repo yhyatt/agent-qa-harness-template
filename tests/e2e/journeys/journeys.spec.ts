@@ -36,8 +36,8 @@ import {
   type JourneyResult,
   type AxeSurface,
   type StepFinding,
-} from './helpers';
-import { captureLocaleSnapshot } from './locale-snapshot';
+} from './helpers.js';
+import { captureLocaleSnapshot } from './locale-snapshot.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -158,7 +158,7 @@ test.describe('J1: primary-user happy path', () => {
 
       // TODO: STEP 04+ - continue until the happy path is complete.
 
-      if (listeners.networkFailures.some((f) => /^5\d\d/.test(f))) {
+      if (listeners.networkFailures.some((f: string) => /^5\d\d/.test(f))) {
         status = 'fail';
       }
     } catch (err) {
@@ -239,7 +239,7 @@ test.describe('J2: secondary-user join', () => {
       // TODO: STEP 02 - verify the redirect or lobby render.
       // TODO: STEP 03 - verify the user can take their first action (submit, vote, etc).
 
-      if (listeners.networkFailures.some((f) => /^5\d\d/.test(f))) {
+      if (listeners.networkFailures.some((f: string) => /^5\d\d/.test(f))) {
         status = 'fail';
       }
     } catch (err) {

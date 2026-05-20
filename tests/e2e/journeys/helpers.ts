@@ -16,7 +16,7 @@
  */
 
 import { type Page } from '@playwright/test';
-import AxeBuilder from '@axe-core/playwright';
+import { AxeBuilder } from '@axe-core/playwright';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -158,7 +158,7 @@ export async function runAxe(
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
       .analyze();
     const violations = results.violations;
-    const top3 = violations.slice(0, 3).map((v) => `${v.id}: ${v.description}`);
+    const top3 = violations.slice(0, 3).map((v: { id: string; description: string }) => `${v.id}: ${v.description}`);
     return { count: violations.length, top3 };
   } catch {
     return { count: -1, top3: ['axe scan failed'] };
