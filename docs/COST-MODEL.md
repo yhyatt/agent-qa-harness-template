@@ -26,7 +26,7 @@ Pricing assumed (as of 2026-05, in USD per million tokens):
 | Haiku 4.5 | $1.00 | $5.00 |
 | Sonnet 4.6 | $3.00 | $15.00 |
 | Opus 4.7 | $15.00 | $75.00 |
-| Gemini 2.5 Pro (via OpenRouter) | $1.25 | $10.00 |
+| Gemini 3.5 Flash (via OpenRouter) | $1.50 | $9.00 |
 | GPT-5 (via OpenRouter) | $2.50 | $15.00 |
 
 One journey (10 steps, 2750 input + 300 output per step):
@@ -36,7 +36,7 @@ One journey (10 steps, 2750 input + 300 output per step):
 | Haiku 4.5 | $0.04 | $0.32 |
 | Sonnet 4.6 | $0.13 | $1.04 |
 | Opus 4.7 | $0.64 | $5.12 |
-| Gemini 2.5 Pro | $0.06 | $0.48 |
+| Gemini 3.5 Flash | $0.07 | $0.56 |
 | GPT-5 | $0.11 | $0.88 |
 
 A full multi-model dispatch (Haiku plus Sonnet plus Opus plus 2 OpenRouter models) over 8 journeys:

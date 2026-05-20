@@ -25,27 +25,44 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
-// Find latest run directory (mirrors multi-model-dispatch.ts with R-nit-2 fix:
-// regex filter ensures only valid YYYY-MM-DD-HHmm entries are considered)
+// Find latest run directory (mirrors multi-model-dispatch.ts:
+// regex filter ensures only valid YYYY-MM-DD-HH-MM entries are considered)
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{4}$/;
+const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
-  let entries: string[];
+
+  // Prefer the pointer written by playwright.config.ts at run time.
+  // Fall back to scan+sort if the file is absent or contains an invalid value.
+  const latestFile = path.join(base, 'latest.txt');
   try {
-    entries = await fs.readdir(base);
+    const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
+    if (RUN_DIR_PATTERN.test(candidate)) {
+      const resolved = path.join(base, candidate);
+      await fs.stat(resolved);
+      return resolved;
+    }
+  } catch {
+    // File missing, unreadable, or points to a non-existent directory. Fall through.
+  }
+
+  let rawEntries: import('node:fs').Dirent[];
+  try {
+    rawEntries = await fs.readdir(base, { withFileTypes: true });
   } catch {
     throw new Error(
       `No .qa-runs/ directory found at ${base}. ` +
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  const valid = entries.filter((e) => RUN_DIR_PATTERN.test(e));
+  const valid = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+    .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HHmm format).`,
+      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
     );
   }
   // Sort lexicographically; the timestamp format sorts correctly
