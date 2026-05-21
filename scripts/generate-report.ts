@@ -621,6 +621,32 @@ async function main(): Promise<void> {
     .join(', ');
   lines.push(`- Per-model fail counts: ${perModelStr || 'none'}`);
 
+  // Per-model parse-error counts. Annotate '(degraded)' when a model's
+  // parse-error rate exceeds 20% of its valid-judgment-plus-error total.
+  // The valid count is derived from per_model_finding_counts as a lower
+  // bound on judgments seen, but the true denominator is parse_errors + N
+  // where N is the number of non-errored judgments for that model. Since
+  // the dedup pass does not surface N directly, the denominator here is
+  // parse_errors + (number of findings - parse_errors at that model)
+  // which equals the count of finding rows the model appears in.
+  // total_raw is the aggregate non-errored judgment count; we approximate
+  // per-model totals from after_dedup which equals the finding count.
+  const findingTotal = stats.after_dedup;
+  const parseErrorEntries = Object.entries(stats.per_model_parse_error_counts).sort(
+    ([a], [b]) => a.localeCompare(b),
+  );
+  const parseErrorStr = parseErrorEntries
+    .map(([m, errs]) => {
+      // Denominator: total dispatched judgments for this model. With one
+      // judgment per (finding, model) pair, that equals findingTotal.
+      const denom = findingTotal;
+      const rate = denom > 0 ? errs / denom : 0;
+      const degraded = rate > 0.2 ? ' (degraded)' : '';
+      return `${m} (${errs})${degraded}`;
+    })
+    .join(', ');
+  lines.push(`- Per-model parse-error counts: ${parseErrorStr || 'none'}`);
+
   if (stats.dispatch_error_count > 0) {
     lines.push(`- Dispatch errors: ${stats.dispatch_error_count}`);
     const firstFive = dispatch_errors.slice(0, 5);

@@ -88,6 +88,12 @@ export interface DedupedRun {
     agreement_rate: number;
     /** per-model count of pass=false judgments (excluding errors); sorted alphabetically. */
     per_model_finding_counts: Record<string, number>;
+    /**
+     * per-model count of judgments whose `error` field is set, i.e. parse
+     * failures surfaced by the dispatcher's syntheticError path. Sorted
+     * alphabetically and seeded to 0 for every model in meta.models.
+     */
+    per_model_parse_error_counts: Record<string, number>;
     /** pass-through from DispatchedRun. */
     dispatch_error_count: number;
     /** set to 'single-model run' when meta.models.length === 1. */

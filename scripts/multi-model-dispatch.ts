@@ -27,7 +27,6 @@ import { fileURLToPath } from 'node:url';
 import type { StepFinding } from '../tests/e2e/journeys/helpers.js';
 import type { ModelJudgment, DispatchedFinding, DispatchError, DispatchedRun } from './types.js';
 import { resolveProvider, isMockModel } from './dispatch/providers.js';
-import { SYSTEM_PROMPT } from './dispatch/prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -381,7 +380,7 @@ async function main(): Promise<void> {
 
       return limit(() =>
         provider
-          .dispatch(m, f, screenshotB64, SYSTEM_PROMPT)
+          .dispatch(m, f, screenshotB64)
           .then((judgment): TaskResult => ({ ok: true, finding: f, model: m, judgment }))
           .catch((err): TaskResult => ({
             ok: false,

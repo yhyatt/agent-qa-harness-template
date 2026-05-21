@@ -13,7 +13,8 @@
     "dedup": "tsx scripts/dedup-findings.ts",
     "report": "tsx scripts/generate-report.ts",
     "scaffold": "bash scripts/scaffold.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {},
   "devDependencies": {
