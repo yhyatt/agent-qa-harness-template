@@ -230,8 +230,8 @@ export function makeOpenRouterProvider(): Provider {
         }
 
         if (!resp.ok) {
-          const body = await resp.text().catch(() => '');
-          throw new Error(`OpenRouter ${resp.status} ${resp.statusText}: ${body.slice(0, 500)}`);
+          const respBody = await resp.text().catch(() => '');
+          throw new Error(`OpenRouter ${resp.status} ${resp.statusText}: ${respBody.slice(0, 500)}`);
         }
 
         const data = (await resp.json()) as OpenRouterResponse;

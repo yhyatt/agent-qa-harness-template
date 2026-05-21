@@ -94,6 +94,14 @@ export interface DedupedRun {
      * alphabetically and seeded to 0 for every model in meta.models.
      */
     per_model_parse_error_counts: Record<string, number>;
+    /**
+     * per-model total count of model_judgments entries actually returned
+     * for that model (valid plus errored). Excludes findings where the
+     * model had no entry at all (e.g. matrix-level dispatch_errors). Used
+     * as the honest denominator for parse-error rate annotations. Sorted
+     * alphabetically and seeded to 0 for every model in meta.models.
+     */
+    per_model_total_judgments: Record<string, number>;
     /** pass-through from DispatchedRun. */
     dispatch_error_count: number;
     /** set to 'single-model run' when meta.models.length === 1. */

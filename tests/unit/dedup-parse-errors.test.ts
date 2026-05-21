@@ -158,6 +158,15 @@ describe('dedup per_model_parse_error_counts', () => {
       'ok': 1,
     });
 
+    // Per-model total judgments: every model returned exactly one judgment
+    // for the single finding (the two flake models returned errored
+    // judgments, ok returned a valid one). All three should be 1.
+    expect(deduped.stats.per_model_total_judgments).toEqual({
+      'flake-a': 1,
+      'flake-b': 1,
+      'ok': 1,
+    });
+
     // Agreement: only one valid voter, who agrees with itself. total_raw=1,
     // agreed_pairs=1, agreement_rate=1.
     expect(deduped.stats.total_raw).toBe(1);
