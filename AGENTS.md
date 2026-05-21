@@ -52,8 +52,7 @@ This skill is intentionally narrow. Multi-model dispatch, journey authoring, and
 
 ```
 TEST_TARGET_URL=https://app.example.com    # the URL to walk
-ANTHROPIC_API_KEY=...                       # for dispatch
-OPENROUTER_API_KEY=...                      # for cross-provider opinions
+OPENROUTER_API_KEY=...                      # for dispatch (single key, all providers)
 QA_AUTH_FIXTURE_PATH=tests/e2e/fixtures/host-auth.json   # optional override
 ```
 

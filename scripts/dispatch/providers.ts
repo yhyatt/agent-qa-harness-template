@@ -1,20 +1,26 @@
 /**
  * Provider abstraction for the multi-model dispatcher.
  *
- * Anthropic family: uses @anthropic-ai/sdk directly.
- * Everything else: uses openai SDK pointed at https://openrouter.ai/api/v1
- * Mock: deterministic synthetic output for offline verification.
+ * Single real dispatch path: OpenRouter chat-completions over plain fetch.
+ * All real models (Anthropic, Google, OpenAI, etc.) are addressed by their
+ * provider-prefixed OpenRouter id (e.g. 'anthropic/claude-sonnet-4-6',
+ * 'google/gemini-3.5-flash', 'openai/gpt-5').
+ *
+ * Mock provider stays. Used by MOCK_DISPATCH=1 and by the canonical
+ * mock-a / mock-b / mock-c model names for offline tests.
+ *
+ * See docs/DECISIONS.md ADR-012 for the rationale.
  */
 
 import type { StepFinding } from '../../tests/e2e/journeys/helpers.js';
 import type { ModelJudgment, Severity, Bucket } from '../types.js';
-import { renderStep, SYSTEM_PROMPT } from './prompt.js';
+import { renderStep } from './prompt.js';
 
 const VALID_SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
 const VALID_BUCKETS = ['pass', 'blocking', 'cosmetic', 'flake'] as const;
 
 export interface Provider {
-  family: 'anthropic' | 'openrouter' | 'mock';
+  family: 'openrouter' | 'mock';
   dispatch(
     model: string,
     finding: StepFinding,
@@ -87,86 +93,24 @@ function syntheticError(
 }
 
 // ---------------------------------------------------------------------------
-// Anthropic provider
+// OpenRouter provider (single dispatch path for all real models)
 // ---------------------------------------------------------------------------
 
-export function makeAnthropicProvider(): Provider {
-  return {
-    family: 'anthropic',
-    async dispatch(model, finding, screenshotB64, systemPrompt) {
-      // Dynamic import to avoid hard dep when running mock-only
-      const Anthropic = (await import('@anthropic-ai/sdk')).default;
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
-      const userContent: Parameters<typeof client.messages.create>[0]['messages'][0]['content'] = [];
-
-      userContent.push({ type: 'text', text: renderStep(finding) });
-
-      if (screenshotB64 !== null) {
-        userContent.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: 'image/png',
-            data: screenshotB64,
-          },
-        });
-      }
-
-      const callModel = async (extraInstruction?: string): Promise<string> => {
-        const systemContent = extraInstruction
-          ? systemPrompt + '\n\n' + extraInstruction
-          : systemPrompt;
-
-        const resp = await client.messages.create({
-          model,
-          max_tokens: 1024,
-          system: systemContent,
-          messages: [{ role: 'user', content: userContent }],
-        });
-
-        const textBlock = resp.content.find((b) => b.type === 'text');
-        return textBlock ? (textBlock as { type: 'text'; text: string }).text : '';
-      };
-
-      // callModel throws are network/5xx errors: let them propagate to the dispatcher.
-      // Only parseJudgment failures (malformed JSON) trigger the retry/synthetic path.
-      const rawText = await callModel();
-
-      let retryRaw = '';
-      try {
-        return parseJudgment(rawText, finding, model);
-      } catch {
-        // Parse failed on first attempt. Retry with stricter instruction.
-        retryRaw = await callModel(
-          'IMPORTANT: Return ONLY the JSON object. No prose, no code fences, no explanation. Start your response with { and end with }.',
-        );
-        try {
-          return parseJudgment(retryRaw, finding, model);
-        } catch (parseErr) {
-          const reason =
-            parseErr instanceof Error ? parseErr.message : String(parseErr);
-          return syntheticError(model, finding, `parse failed after retry: ${reason}`, retryRaw);
-        }
-      }
-    },
-  };
+interface OpenRouterChoice {
+  message?: { content?: string };
 }
 
-// ---------------------------------------------------------------------------
-// OpenRouter provider (openai SDK)
-// ---------------------------------------------------------------------------
+interface OpenRouterResponse {
+  choices?: OpenRouterChoice[];
+  error?: { message?: string };
+}
 
 export function makeOpenRouterProvider(): Provider {
   return {
     family: 'openrouter',
     async dispatch(model, finding, screenshotB64, systemPrompt) {
-      const OpenAI = (await import('openai')).default;
-      const client = new OpenAI({
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseURL: 'https://openrouter.ai/api/v1',
-      });
-
       type ContentPart =
         | { type: 'text'; text: string }
         | { type: 'image_url'; image_url: { url: string } };
@@ -185,16 +129,32 @@ export function makeOpenRouterProvider(): Provider {
           ? systemPrompt + '\n\n' + extraInstruction
           : systemPrompt;
 
-        const resp = await client.chat.completions.create({
-          model,
-          max_tokens: 1024,
-          messages: [
-            { role: 'system', content: systemContent },
-            { role: 'user', content: userContent },
-          ],
+        const resp = await fetch(OPENROUTER_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY ?? ''}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            messages: [
+              { role: 'system', content: systemContent },
+              { role: 'user', content: userContent },
+            ],
+          }),
         });
 
-        return resp.choices[0]?.message?.content ?? '';
+        if (!resp.ok) {
+          const body = await resp.text().catch(() => '');
+          throw new Error(`OpenRouter ${resp.status} ${resp.statusText}: ${body.slice(0, 500)}`);
+        }
+
+        const data = (await resp.json()) as OpenRouterResponse;
+        if (data.error?.message) {
+          throw new Error(`OpenRouter error: ${data.error.message}`);
+        }
+        return data.choices?.[0]?.message?.content ?? '';
       };
 
       // callModel throws are network/5xx errors: let them propagate to the dispatcher.
@@ -333,11 +293,6 @@ export function makeMockProvider(): Provider {
 // Provider factory
 // ---------------------------------------------------------------------------
 
-/** Returns true if the model name indicates the Anthropic family. */
-export function isAnthropicModel(model: string): boolean {
-  return model.startsWith('claude-');
-}
-
 /** Returns true if the model name indicates the mock provider. */
 export function isMockModel(model: string): boolean {
   return model.startsWith('mock-');
@@ -354,6 +309,7 @@ function isCanonicalMockModel(model: string): boolean {
  * When MOCK_DISPATCH=1, all models use the mock provider.
  * When a model is a canonical mock name (mock-a, mock-b, mock-c, or their mock-X-... variants),
  * it uses the mock provider. Any other mock-* name is rejected.
+ * All other models dispatch through OpenRouter.
  */
 export function resolveProvider(model: string, mockDispatch: boolean): Provider {
   if (mockDispatch) {
@@ -366,9 +322,6 @@ export function resolveProvider(model: string, mockDispatch: boolean): Provider 
       );
     }
     return makeMockProvider();
-  }
-  if (isAnthropicModel(model)) {
-    return makeAnthropicProvider();
   }
   return makeOpenRouterProvider();
 }

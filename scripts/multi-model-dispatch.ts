@@ -7,12 +7,11 @@
  *
  * Env vars:
  *   QA_RUN_DIR              path to the .qa-runs/<run> directory (default: latest under .qa-runs/)
- *   QA_MODELS               comma-separated model list (default: claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5)
+ *   QA_MODELS               comma-separated model list (default: anthropic/claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5)
  *   QA_DISPATCH_CONCURRENCY parallelism cap per provider family (default: 4)
  *   MOCK_DISPATCH           set to 1 to use the mock provider for all models
  *   QA_ALLOW_SINGLE_FAMILY  set to 1 to bypass ADR-002 single-family check (for testing)
- *   ANTHROPIC_API_KEY       required for any Anthropic-family model
- *   OPENROUTER_API_KEY      required for any non-Anthropic, non-mock model
+ *   OPENROUTER_API_KEY      required for any real (non-mock) model
  */
 
 import { promises as fs } from 'node:fs';
@@ -20,7 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { StepFinding } from '../tests/e2e/journeys/helpers.js';
 import type { ModelJudgment, DispatchedFinding, DispatchError, DispatchedRun } from './types.js';
-import { resolveProvider, isAnthropicModel, isMockModel } from './dispatch/providers.js';
+import { resolveProvider, isMockModel } from './dispatch/providers.js';
 import { SYSTEM_PROMPT } from './dispatch/prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -177,9 +176,10 @@ async function loadScreenshot(
     return null;
   }
 
-  // Anthropic per-image limit is 4MB. OpenRouter providers vary; a 3.9MB raw PNG
-  // becomes ~5.2MB as a base64 data URI that some OpenRouter providers may still reject.
-  // Those rejections bubble through as normal dispatch_errors.
+  // OpenRouter routes to underlying providers whose per-image limits vary; the
+  // strictest in practice is 4MB (Anthropic). A 3.9MB raw PNG becomes ~5.2MB as
+  // a base64 data URI, which some providers may still reject. Those rejections
+  // bubble through as normal dispatch_errors.
   const FOUR_MB = 4 * 1024 * 1024;
   if (data.byteLength > FOUR_MB) {
     dispatchErrors.push({
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const modelList =
-    process.env.QA_MODELS ?? 'claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5';
+    process.env.QA_MODELS ?? 'anthropic/claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5';
   const models = modelList.split(',').map((m) => m.trim()).filter(Boolean);
 
   const runDirEnv = process.env.QA_RUN_DIR;
@@ -258,11 +258,12 @@ async function main(): Promise<void> {
 
   // 2. Validate matrix (ADR-002)
   // ADR-002 check comes FIRST, before key checks, so the message is unambiguous
-  // regardless of which keys are set in the environment.
+  // regardless of which keys are set in the environment. With provider-prefixed
+  // OpenRouter model ids, the cross-provider requirement reads "at least one
+  // model whose id does not start with anthropic/".
   if (!mockDispatch) {
     const realModels = models.filter((m) => !isMockModel(m));
-    const anthropicModels = realModels.filter(isAnthropicModel);
-    const nonAnthropicModels = realModels.filter((m) => !isAnthropicModel(m));
+    const nonAnthropicModels = realModels.filter((m) => !m.startsWith('anthropic/'));
 
     if (realModels.length > 0 && nonAnthropicModels.length === 0 && !allowSingleFamily) {
       console.error(
@@ -274,16 +275,11 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Key checks (after ADR-002)
-    if (anthropicModels.length > 0 && !process.env.ANTHROPIC_API_KEY) {
+    // Key check (after ADR-002): OpenRouter is the single dispatch path. Any
+    // real (non-mock) model in the matrix requires OPENROUTER_API_KEY.
+    if (realModels.length > 0 && !process.env.OPENROUTER_API_KEY) {
       console.error(
-        `ANTHROPIC_API_KEY is not set but Anthropic models were requested: ${anthropicModels.join(', ')}`,
-      );
-      process.exit(1);
-    }
-    if (nonAnthropicModels.length > 0 && !process.env.OPENROUTER_API_KEY) {
-      console.error(
-        `OPENROUTER_API_KEY is not set but non-Anthropic models were requested: ${nonAnthropicModels.join(', ')}`,
+        `OPENROUTER_API_KEY is not set but real models were requested: ${realModels.join(', ')}`,
       );
       process.exit(1);
     }
@@ -325,14 +321,12 @@ async function main(): Promise<void> {
   const dispatchErrors: DispatchError[] = [];
   const screenshotCache = new Map<string, string | null>();
 
-  // Two semaphores: one per family
-  const anthropicLimit = semaphore(concurrency);
+  // Two semaphores: one for the openrouter dispatch path, one for mock.
   const openrouterLimit = semaphore(concurrency);
   const mockLimit = semaphore(concurrency);
 
   function limiterFor(model: string): ReturnType<typeof semaphore> {
     if (isMockModel(model) || mockDispatch) return mockLimit;
-    if (isAnthropicModel(model)) return anthropicLimit;
     return openrouterLimit;
   }
 

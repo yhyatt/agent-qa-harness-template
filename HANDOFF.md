@@ -28,7 +28,7 @@ The structural shell is complete and ready for a fresh Claude Code session to ex
 
 ### Stubs with thorough TODO commentary (next-session priority work in order)
 
-1. **`scripts/multi-model-dispatch.ts`** - complete spec in the comment block. Implementation requires choosing the SDK (`@anthropic-ai/sdk` direct plus `openai` SDK pointed at OpenRouter), the dispatch matrix env-var format, and the per-model output validation. Spec is ready; code is not. Estimated: half a day for a working v1.
+1. **`scripts/multi-model-dispatch.ts`** - complete spec in the comment block. Implementation dispatches all real models through OpenRouter chat-completions on a single fetch path. Models use provider-prefixed ids (e.g. `anthropic/claude-sonnet-4-6`). Spec is ready; code is not. Estimated: half a day for a working v1.
 
 2. **`scripts/dedup-findings.ts`** - full spec in the comment. The hash function is sketched. Edge cases the spec calls out: partial agreement (N-1 of N models flag), normalized title collisions across severity buckets. Estimated: 2-3 hours.
 
