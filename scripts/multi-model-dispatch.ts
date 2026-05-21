@@ -6,9 +6,15 @@
  * fan-out loop), and writes findings.dispatched.json with per-model judgments.
  *
  * Env vars:
- *   QA_RUN_DIR              path to the .qa-runs/<run> directory (default: latest under .qa-runs/)
- *   QA_MODELS               comma-separated model list (default: anthropic/claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5)
+ *   QA_RUN_DIR              run directory selector. Three accepted forms (see resolveRunDir):
+ *                            (a) YYYY-MM-DD-HH-MM run id, resolved under .qa-runs/
+ *                            (b) explicit relative or absolute path
+ *                            (c) bare name, treated as a run id with a stderr note
+ *                           When unset, the latest run under .qa-runs/ is used.
+ *   QA_MODELS               comma-separated model list (default: anthropic/claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5).
+ *                           Every real id must be an OpenRouter provider-prefixed id (`<provider>/<model>`).
  *   QA_DISPATCH_CONCURRENCY parallelism cap per provider family (default: 4)
+ *   QA_DISPATCH_TIMEOUT_MS  per-call OpenRouter fetch deadline in ms (default: 60000)
  *   MOCK_DISPATCH           set to 1 to use the mock provider for all models
  *   QA_ALLOW_SINGLE_FAMILY  set to 1 to bypass ADR-002 single-family check (for testing)
  *   OPENROUTER_API_KEY      required for any real (non-mock) model
@@ -257,12 +263,29 @@ async function main(): Promise<void> {
   const runDir = runDirEnv ? resolveRunDir(runDirEnv) : await findLatestRunDir();
 
   // 2. Validate matrix (ADR-002)
-  // ADR-002 check comes FIRST, before key checks, so the message is unambiguous
+  // Model id shape check runs FIRST: a bare un-prefixed id like
+  // `claude-sonnet-4-6` would otherwise pass the cross-provider gate (it does
+  // not start with `anthropic/`), only to 404 at OpenRouter dispatch time and
+  // produce noisy dispatch_errors instead of a fast configuration failure.
+  // After the shape check, the ADR-002 gate runs so the message is unambiguous
   // regardless of which keys are set in the environment. With provider-prefixed
   // OpenRouter model ids, the cross-provider requirement reads "at least one
   // model whose id does not start with anthropic/".
   if (!mockDispatch) {
     const realModels = models.filter((m) => !isMockModel(m));
+
+    const OPENROUTER_ID_PATTERN = /^[a-z0-9-]+\/[a-z0-9._-]+(?::[a-z0-9-]+)?$/i;
+    const malformed = realModels.filter((m) => !OPENROUTER_ID_PATTERN.test(m));
+    if (malformed.length > 0) {
+      console.error(
+        'Invalid model id(s) in dispatch matrix. All real (non-mock) ids must use the\n' +
+          'OpenRouter provider-prefixed form, e.g. anthropic/claude-sonnet-4-6.\n' +
+          `Offending ids: ${malformed.join(', ')}\n` +
+          `Current model list: ${models.join(', ')}`,
+      );
+      process.exit(1);
+    }
+
     const nonAnthropicModels = realModels.filter((m) => !m.startsWith('anthropic/'));
 
     if (realModels.length > 0 && nonAnthropicModels.length === 0 && !allowSingleFamily) {

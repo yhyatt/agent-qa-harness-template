@@ -97,6 +97,20 @@ function syntheticError(
 // ---------------------------------------------------------------------------
 
 const OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const DEFAULT_DISPATCH_TIMEOUT_MS = 60_000;
+
+function resolveTimeoutMs(): number {
+  const raw = process.env.QA_DISPATCH_TIMEOUT_MS;
+  if (!raw) return DEFAULT_DISPATCH_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    process.stderr.write(
+      `QA_DISPATCH_TIMEOUT_MS='${raw}' is not a positive number; falling back to ${DEFAULT_DISPATCH_TIMEOUT_MS}ms.\n`,
+    );
+    return DEFAULT_DISPATCH_TIMEOUT_MS;
+  }
+  return parsed;
+}
 
 interface OpenRouterChoice {
   message?: { content?: string };
@@ -124,26 +138,44 @@ export function makeOpenRouterProvider(): Provider {
         });
       }
 
+      const timeoutMs = resolveTimeoutMs();
+
       const callModel = async (extraInstruction?: string): Promise<string> => {
         const systemContent = extraInstruction
           ? systemPrompt + '\n\n' + extraInstruction
           : systemPrompt;
 
-        const resp = await fetch(OPENROUTER_ENDPOINT, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY ?? ''}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 1024,
-            messages: [
-              { role: 'system', content: systemContent },
-              { role: 'user', content: userContent },
-            ],
-          }),
-        });
+        // Bound each fetch with an AbortController so a stalled provider call
+        // cannot hold a dispatcher semaphore slot indefinitely.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        let resp: Response;
+        try {
+          resp = await fetch(OPENROUTER_ENDPOINT, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${process.env.OPENROUTER_API_KEY ?? ''}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: 1024,
+              messages: [
+                { role: 'system', content: systemContent },
+                { role: 'user', content: userContent },
+              ],
+            }),
+            signal: controller.signal,
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            throw new Error(`OpenRouter fetch timeout after ${timeoutMs}ms`);
+          }
+          throw err;
+        } finally {
+          clearTimeout(timer);
+        }
 
         if (!resp.ok) {
           const body = await resp.text().catch(() => '');
