@@ -217,7 +217,7 @@ test.describe('J2: secondary-user join', () => {
           action: 'no join code available',
           severity: 'INFO',
           bucket: 'pass',
-          title: 'J2 skipped: no join code available',
+          title: 'J2 auth-blocked: no join code available',
           judgment: 'Set FALLBACK_JOIN_CODE or populate the auth fixture to enable J2.',
         }),
       );

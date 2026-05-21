@@ -122,9 +122,10 @@ describe('multi-model-dispatch skip rule', () => {
       title: 'J1 auth-blocked: no fixture',
       judgment: 'Auth fixture not present.',
     });
-    // Title matches 'no code' substring directly. The template's J2 placeholder
-    // says "no join code available" which does not match this rule; tightening
-    // the regex to cover that case is out of scope for this slice.
+    // Title matches the 'no code' branch directly. The template's own J2
+    // placeholder uses 'J2 auth-blocked: no join code available' which is
+    // covered by the 'auth-blocked' branch; this case exercises the 'no code'
+    // branch independently in case a future journey leans on it.
     const noCode: StepFinding = makeFinding({
       step_id: 'J2/00',
       severity: 'INFO',
