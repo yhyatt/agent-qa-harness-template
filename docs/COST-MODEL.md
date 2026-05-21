@@ -19,15 +19,15 @@ A journey is roughly 6-12 steps. Call it 10 steps as the working estimate.
 
 ## Per-journey cost by tier
 
-Pricing assumed (as of 2026-05, in USD per million tokens):
+Pricing assumed (as of 2026-05, in USD per million tokens). All models route through OpenRouter; per-provider list prices apply with a small OpenRouter markup folded in.
 
 | Tier | Input | Output |
 |------|-------|--------|
-| Haiku 4.5 | $1.00 | $5.00 |
-| Sonnet 4.6 | $3.00 | $15.00 |
-| Opus 4.7 | $15.00 | $75.00 |
-| Gemini 3.5 Flash (via OpenRouter) | $1.50 | $9.00 |
-| GPT-5 (via OpenRouter) | $2.50 | $15.00 |
+| Haiku 4.5 (anthropic/) | $1.00 | $5.00 |
+| Sonnet 4.6 (anthropic/) | $3.00 | $15.00 |
+| Opus 4.7 (anthropic/) | $15.00 | $75.00 |
+| Gemini 3.5 Flash (google/) | $1.50 | $9.00 |
+| GPT-5 (openai/) | $2.50 | $15.00 |
 
 One journey (10 steps, 2750 input + 300 output per step):
 

@@ -22,25 +22,24 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 
 **Revisit if:** the harness ever needs to be authored by people who already know Cypress well and the multi-context need disappears.
 
-## ADR-002: Mixed Anthropic plus OpenRouter dispatch
+## ADR-002: Cross-provider second opinions in the dispatch matrix
 
-**Decided:** dispatch journeys across at least one Anthropic tier (Sonnet baseline) plus at least one OpenRouter cross-provider model.
+**Decided:** the dispatch matrix must include at least one non-Anthropic model. With provider-prefixed OpenRouter ids, the check reads "at least one model whose id does not start with `anthropic/`".
 
-**Alternatives:** Anthropic-only, OpenRouter-only, custom multi-provider integration.
+**Alternatives:** single-family dispatch (Anthropic-only or Gemini-only), no enforcement.
 
 **Rationale:**
 
 - Provider-family blind spots are real. Anthropic models share training data; a copy mistake that Sonnet generated does not get flagged by Sonnet on review. The same applies in the other direction: a Gemini-generated mistake passes Gemini's review.
-- OpenRouter abstracts the provider integration. One API key, one HTTP endpoint, dynamic model routing. Building a custom multi-provider layer is engineering debt that buys nothing.
-- Anthropic direct (not via OpenRouter) for Anthropic models because the direct integration is more reliable, has lower latency, and supports more SDK features (caching, batch).
+- Cross-provider opinions are the load-bearing part of the dedup story.
 
 **Trade-off:**
 
-- Two API keys to manage instead of one.
-- OpenRouter adds a small markup vs going direct to each provider.
-- If OpenRouter has an outage, the cross-provider dispatch path is down even when individual providers are fine.
+- Some signal is sacrificed when a model family the user does not trust is forced into the matrix. The escape hatch is `QA_ALLOW_SINGLE_FAMILY=1` for explicit testing.
 
-**Revisit if:** OpenRouter ever degrades materially or a provider we use heavily (Gemini, GPT) becomes worth direct integration.
+**Revisit if:** an empirical study shows single-family dispatch surfaces the same set of bugs as cross-family.
+
+**Note:** ADR-002 originally also prescribed Anthropic-direct dispatch via `@anthropic-ai/sdk` alongside OpenRouter for everything else. That part was superseded by ADR-012; OpenRouter is now the single dispatch path.
 
 ## ADR-003: JSON-per-step output schema
 
@@ -212,3 +211,24 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 - The skill is thin: it shells out to gh and the scaffolder. Low maintenance.
 
 **Revisit if:** GitHub's template feature changes meaningfully, or Claude skills become a different shape.
+
+## ADR-012: OpenRouter is the single dispatch path
+
+**Decided:** all real models (Anthropic, Google, OpenAI, anyone else) dispatch through OpenRouter chat-completions on one HTTP code path. The only key the harness consumes is `OPENROUTER_API_KEY`. Model ids use the provider-prefixed OpenRouter form: `anthropic/claude-sonnet-4-6`, `google/gemini-3.5-flash`, `openai/gpt-5`. The mock provider stays for offline tests.
+
+**Alternatives:** keep the prior Anthropic-direct path alongside OpenRouter (the ADR-002 v1 shape), build a custom provider abstraction per family.
+
+**Rationale:**
+
+- Single key, single billing surface, single auth model. Easier ops, easier scaffold.
+- One code path means one set of bugs to fix and one shape to test. The prior two-path layout doubled the maintenance footprint without buying anything the harness uses.
+- OpenRouter routes to underlying providers anyway. Going direct to Anthropic only buys lower latency at the cost of an extra dependency, an extra key, and a parallel branch in the dispatcher.
+
+**Trade-off:**
+
+- Dependence on OpenRouter uptime. If OpenRouter is down, the harness is down even for Anthropic models. Accepted because cross-provider dispatch (ADR-002) is the whole point of the harness; if OpenRouter is down we cannot honor that policy anyway.
+- Lose access to provider-direct SDK features (Anthropic prompt caching, batch). Reintroduce them only if a real run shows the missing feature would have changed outcomes.
+
+**Supersedes:** the Anthropic-direct portion of ADR-002 v1. The cross-provider second-opinions policy in ADR-002 stays, restated against provider-prefixed ids.
+
+**Revisit if:** OpenRouter materially degrades, or a provider-direct feature (caching, batch) becomes load-bearing for cost or latency.

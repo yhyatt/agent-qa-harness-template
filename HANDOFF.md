@@ -26,13 +26,13 @@ The structural shell is complete and ready for a fresh Claude Code session to ex
 - `LICENSE` - MIT
 - `.gitignore` - comprehensive (covers `.qa-runs/`, fixtures, env files, common build outputs)
 
-### Stubs with thorough TODO commentary (next-session priority work in order)
+### Implemented in earlier slices (kept here as a quick orientation map)
 
-1. **`scripts/multi-model-dispatch.ts`** - complete spec in the comment block. Implementation requires choosing the SDK (`@anthropic-ai/sdk` direct plus `openai` SDK pointed at OpenRouter), the dispatch matrix env-var format, and the per-model output validation. Spec is ready; code is not. Estimated: half a day for a working v1.
+1. **`scripts/multi-model-dispatch.ts`** - implemented. All real models dispatch through OpenRouter chat-completions on a single fetch path; ids use the provider-prefixed form (e.g. `anthropic/claude-sonnet-4-6`). ADR-002 cross-provider gate, id-shape validation, per-call timeout, and the mock path are all wired. Followup work (parse-rate-tuning per-model configs) is tracked under Slice 1.
 
-2. **`scripts/dedup-findings.ts`** - full spec in the comment. The hash function is sketched. Edge cases the spec calls out: partial agreement (N-1 of N models flag), normalized title collisions across severity buckets. Estimated: 2-3 hours.
+2. **`scripts/dedup-findings.ts`** - implemented. Hash function ships with the normalized-title + severity-bucket key; partial agreement (N-1 of N) and cross-severity collisions are surfaced as separate output sections.
 
-3. **`scripts/generate-report.ts`** - report template is in the comment. Renders `findings.deduped.json` into a markdown grouped by status then severity. Estimated: 2 hours.
+3. **`scripts/generate-report.ts`** - implemented. Renders `findings.deduped.json` into a markdown grouped by status then severity, with a per-model stats block.
 
 4. **`scripts/scaffold.sh`** - interactive scaffolder. Currently prints "not implemented yet" and exits. The spec for the substitutions lives in `docs/CUSTOMIZATION.md`. Implementation tactic: prefer generating new adapter files over sed-substituting template files. Estimated: half a day.
 

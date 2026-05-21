@@ -56,7 +56,7 @@ Per-step schema (canonical):
   "axe_top3": [],
   "judgment": "Button rendered with correct copy. Click triggered OAuth redirect to expected URL.",
   "bucket": "pass",
-  "model": "claude-sonnet-4-6"
+  "model": "anthropic/claude-sonnet-4-6"
 }
 ```
 

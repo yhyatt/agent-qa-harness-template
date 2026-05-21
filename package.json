@@ -15,10 +15,7 @@
     "scaffold": "bash scripts/scaffold.sh",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "openai": "^4.77.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@axe-core/playwright": "^4.10.0",
     "@playwright/test": "^1.60.0",
