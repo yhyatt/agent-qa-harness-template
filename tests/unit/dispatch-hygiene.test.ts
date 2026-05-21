@@ -62,16 +62,22 @@ describe('hasAuthFixture', () => {
     expect(hasAuthFixture(path.join(tmpRoot, 'missing.json'))).toBe(false);
   });
 
-  it('returns false on empty cookies/origins', async () => {
+  it('returns false on empty cookies and empty origins', async () => {
     const p = path.join(tmpRoot, 'empty.json');
     await fs.writeFile(p, JSON.stringify({ cookies: [], origins: [] }));
     expect(hasAuthFixture(p)).toBe(false);
   });
 
-  it('returns false on cookies-empty-origins-populated', async () => {
-    const p = path.join(tmpRoot, 'half-empty.json');
-    await fs.writeFile(p, JSON.stringify({ cookies: [], origins: [{ origin: 'x' }] }));
-    expect(hasAuthFixture(p)).toBe(false);
+  it('returns true when origins is populated even if cookies is empty (JWT-in-localStorage auth)', async () => {
+    const p = path.join(tmpRoot, 'origins-only.json');
+    await fs.writeFile(p, JSON.stringify({ cookies: [], origins: [{ origin: 'https://example.com', localStorage: [{ name: 'jwt', value: 'xyz' }] }] }));
+    expect(hasAuthFixture(p)).toBe(true);
+  });
+
+  it('returns true when cookies is populated even if origins is empty (cookie-only session auth)', async () => {
+    const p = path.join(tmpRoot, 'cookies-only.json');
+    await fs.writeFile(p, JSON.stringify({ cookies: [{ name: 'session', value: 'abc' }], origins: [] }));
+    expect(hasAuthFixture(p)).toBe(true);
   });
 
   it('returns false on malformed JSON without throwing', async () => {
@@ -190,10 +196,14 @@ describe('multi-model-dispatch skip rule', () => {
     // Two findings dispatched (J3/01 and J4/01), two skipped.
     expect(dispatched.findings.length).toBe(2);
     expect(dispatched.findings.map((f) => f.step_id).sort()).toEqual(['J3/01', 'J4/01']);
-    expect(dispatched.meta.skipped.length).toBe(2);
+
+    // meta.skipped is optional on the type for backwards compat with older
+    // dispatched.json artifacts; the dispatcher always writes it, so we
+    // assert presence and shape here.
+    const skipped = (dispatched.meta.skipped ?? []) as SkippedFinding[];
+    expect(skipped.length).toBe(2);
 
     // Skipped list is sorted by step_id and carries the reason.
-    const skipped = dispatched.meta.skipped as SkippedFinding[];
     expect(skipped.map((s) => s.step_id)).toEqual(['J1/01', 'J2/00']);
     expect(skipped.every((s) => s.reason === 'auth-blocked-placeholder')).toBe(true);
     expect(skipped[0]!.title).toBe('J1 auth-blocked: no fixture');

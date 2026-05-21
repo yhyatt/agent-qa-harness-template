@@ -185,11 +185,14 @@ export const AUTH_FIXTURE_PATH =
   path.resolve('tests/e2e/fixtures/host-auth.json');
 
 /**
- * Returns true only when the auth fixture file exists AND parses to a
- * storageState with at least one cookie and one origin. An empty
- * `{"cookies": [], "origins": []}` (or a malformed JSON file) is treated
- * as missing; one stderr line records the downgrade so journeys gating
- * on this signal are not silently mistaken about session presence.
+ * Returns true when the auth fixture file exists AND parses to a
+ * storageState with at least one cookie OR at least one origin. The OR
+ * matters: cookie-based sessions legitimately have empty `origins`
+ * (no localStorage / sessionStorage state to capture), and JWT-in-
+ * localStorage sessions legitimately have empty `cookies`. Both arrays
+ * empty (or a malformed JSON file) is treated as missing; one stderr
+ * line records the downgrade so journeys gating on this signal are
+ * not silently mistaken about session presence.
  */
 export function hasAuthFixture(fixturePath: string = AUTH_FIXTURE_PATH): boolean {
   if (!fs.existsSync(fixturePath)) return false;
@@ -217,9 +220,9 @@ export function hasAuthFixture(fixturePath: string = AUTH_FIXTURE_PATH): boolean
   const cookies = Array.isArray(parsed.cookies) ? parsed.cookies : [];
   const origins = Array.isArray(parsed.origins) ? parsed.origins : [];
 
-  if (cookies.length === 0 || origins.length === 0) {
+  if (cookies.length === 0 && origins.length === 0) {
     process.stderr.write(
-      `note: auth fixture present but empty (cookies=${cookies.length}, origins=${origins.length}); treating as missing\n`,
+      `note: auth fixture present but both cookies and origins are empty; treating as missing\n`,
     );
     return false;
   }

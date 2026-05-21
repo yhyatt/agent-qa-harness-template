@@ -427,12 +427,10 @@ async function main(): Promise<void> {
       const existing = routeMap.get(route);
       if (!existing) {
         routeMap.set(route, { violations, top3: f.axe_top3 });
-      } else if (violations === -1) {
-        // scan failure takes precedence only if no positive count already recorded
-        if (existing.violations === 0) {
-          routeMap.set(route, { violations, top3: f.axe_top3 });
-        }
       } else if (violations > existing.violations) {
+        // Keep the higher signal: a positive count beats a prior -1 (scan
+        // failure); a higher count beats a lower count. The zero case is
+        // never reached because zero is filtered out above.
         routeMap.set(route, { violations, top3: f.axe_top3 });
       }
     }

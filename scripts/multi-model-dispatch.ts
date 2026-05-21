@@ -359,7 +359,7 @@ async function main(): Promise<void> {
   // Skipped findings are pulled out entirely (no DispatchedFinding entry);
   // they surface only as a count in meta.skipped, which threads through to
   // dedup and the final report.
-  const dispatched: StepFinding[] = [];
+  const findingsToDispatch: StepFinding[] = [];
   const skipped: SkippedFinding[] = [];
   for (const f of allFindings) {
     if (shouldSkipFinding(f)) {
@@ -369,7 +369,7 @@ async function main(): Promise<void> {
         reason: 'auth-blocked-placeholder',
       });
     } else {
-      dispatched.push(f);
+      findingsToDispatch.push(f);
     }
   }
   skipped.sort((a, b) => a.step_id.localeCompare(b.step_id));
@@ -380,7 +380,7 @@ async function main(): Promise<void> {
     );
   }
 
-  const findings = dispatched;
+  const findings = findingsToDispatch;
 
   // 4. Handle empty input
   if (findings.length === 0) {
