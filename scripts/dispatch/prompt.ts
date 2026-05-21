@@ -1,10 +1,23 @@
 /**
- * System prompt and step renderer for the multi-model dispatcher.
+ * System prompts and step renderer for the multi-model dispatcher.
+ *
+ * Two prompt variants are exported:
+ *   BASELINE_PROMPT  inlines a JSON schema and reads as a single instruction
+ *                    block. Used for models without provider-side schema
+ *                    enforcement (currently Claude on OpenRouter, which
+ *                    rejects response_format json_schema with http 400).
+ *   CLEANED_PROMPT   omits the inline schema and relies on a separate
+ *                    response_format json_schema payload. Used for Gemini
+ *                    and GPT-5 where strict schema enforcement is supported.
+ *
+ * Pairing is enforced in scripts/dispatch/configs.ts:MODEL_CONFIGS. Do not
+ * ship CLEANED_PROMPT without also enabling json_schema on the same call;
+ * phase C measured that combination regressing parse rates.
  */
 
 import type { StepFinding } from '../../tests/e2e/journeys/helpers.js';
 
-export const SYSTEM_PROMPT = `You are a QA reviewer judging one step of an automated user journey.
+export const BASELINE_PROMPT = `You are a QA reviewer judging one step of an automated user journey.
 
 You will receive a structured JSON capture of a single step, and possibly a screenshot of the page at that step. Your task is to return a strict JSON object conforming to the ModelJudgment schema below. Do not include any text outside the JSON.
 
@@ -50,6 +63,36 @@ Return exactly this JSON shape, no extra keys:
 - concerns must be actionable: "Button label reads 'Sbumit' instead of 'Submit'" not "typo found".
 - confidence reflects evidence quality: 0.9 for a clear screenshot plus detailed JSON, 0.4 for JSON-only, 0.2 for ambiguous.
 `;
+
+/**
+ * Cleaned prompt for models with provider-side json_schema enforcement.
+ *
+ * Body matches `.research-parse-rate/variants/cleaned-prompt.txt` byte-for-byte.
+ * Do not reformat. Phase C validated this exact text against the gemini and
+ * gpt-5 configs (cleaned + strict + require_parameters [+ reasoning minimal]).
+ */
+export const CLEANED_PROMPT = `You are a QA reviewer judging one step of an automated user journey. You will receive a structured JSON capture of a single step and possibly a screenshot of the page at that step. Your task is to return a strict JSON object conforming to the ModelJudgment schema attached to this request. Return only the JSON. No prose, no commentary, no code fences, no surrounding text.
+
+## Your focus
+
+Evaluate user-visible signal only:
+- Visible copy: is the text correct, complete, and in the expected locale?
+- Layout: are elements positioned correctly? Are interactive elements reachable?
+- Accessibility: do the axe violations listed represent real user impact?
+- Console and network errors: only flag console errors that are user-facing (broken functionality, failed loads). Ignore noisy dev warnings.
+- Redirect and navigation: does the page land where the user expects?
+
+Do not invent failures. Setting pass to false requires concrete evidence in the JSON capture or the screenshot. If you see nothing wrong, set pass to true even if the step has a non-passing tentative bucket from the harness.
+
+## Output rules
+
+- Return one JSON object. No code fences. No prose before or after the JSON.
+- step_id field must echo the input step_id exactly.
+- model field is your own model identifier. Do not substitute a different one.
+- judgment field is approximately 150 words. No em-dashes, no en-dashes, no double-hyphen separators.
+- concerns entries are actionable and specific. Bad: "typo found". Good: "Button label reads Sbumit instead of Submit".
+- confidence reflects evidence quality. 0.9 for a clear screenshot plus detailed JSON, 0.4 for JSON-only, 0.2 for ambiguous.
+- If the screenshot is absent, lower your confidence but still judge based on the JSON capture.\n`;
 
 /**
  * Renders a StepFinding into a human-friendly multi-section text

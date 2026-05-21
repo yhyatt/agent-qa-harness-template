@@ -14,18 +14,26 @@
 
 import type { StepFinding } from '../../tests/e2e/journeys/helpers.js';
 import type { ModelJudgment, Severity, Bucket } from '../types.js';
-import { renderStep } from './prompt.js';
+import { renderStep, BASELINE_PROMPT, CLEANED_PROMPT } from './prompt.js';
+import { getModelConfig, JUDGMENT_SCHEMA, type ModelConfig } from './configs.js';
 
 const VALID_SEVERITIES = ['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
 const VALID_BUCKETS = ['pass', 'blocking', 'cosmetic', 'flake'] as const;
 
 export interface Provider {
   family: 'openrouter' | 'mock';
+  /**
+   * Dispatch a single (model, finding) pair.
+   *
+   * The systemPrompt is no longer an argument: the OpenRouter provider reads
+   * it from the per-model config (configs.ts:getModelConfig). The mock
+   * provider does not use any prompt. This keeps "what prompt does this
+   * model see" defined in one place.
+   */
   dispatch(
     model: string,
     finding: StepFinding,
     screenshotB64: string | null,
-    systemPrompt: string,
   ): Promise<ModelJudgment>;
 }
 
@@ -121,29 +129,80 @@ interface OpenRouterResponse {
   error?: { message?: string };
 }
 
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
+ * Build the OpenRouter chat-completions request body for a (model, finding,
+ * screenshot) tuple. Pulled out as a pure function so tests can assert the
+ * per-model body shape without mocking fetch.
+ *
+ * The systemContent argument carries either the base prompt for the model
+ * or the base prompt plus a retry-stricter instruction tail. Everything
+ * else is read from the per-model config.
+ */
+export function buildOpenRouterBody(
+  model: string,
+  finding: StepFinding,
+  screenshotB64: string | null,
+  systemContent: string,
+  config: ModelConfig,
+): Record<string, unknown> {
+  const userContent: ContentPart[] = [{ type: 'text', text: renderStep(finding) }];
+  if (screenshotB64 !== null) {
+    userContent.push({
+      type: 'image_url',
+      image_url: { url: `data:image/png;base64,${screenshotB64}` },
+    });
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: config.maxTokens,
+    messages: [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent },
+    ],
+  };
+
+  if (config.responseFormat === 'json_schema') {
+    body['response_format'] = {
+      type: 'json_schema',
+      json_schema: {
+        name: 'ModelJudgment',
+        strict: true,
+        schema: JUDGMENT_SCHEMA,
+      },
+    };
+  }
+
+  if (config.requireParameters) {
+    body['provider'] = { require_parameters: true };
+  }
+
+  if (config.reasoning) {
+    body['reasoning'] = { effort: config.reasoning.effort };
+  }
+
+  return body;
+}
+
 export function makeOpenRouterProvider(): Provider {
   return {
     family: 'openrouter',
-    async dispatch(model, finding, screenshotB64, systemPrompt) {
-      type ContentPart =
-        | { type: 'text'; text: string }
-        | { type: 'image_url'; image_url: { url: string } };
-
-      const userContent: ContentPart[] = [{ type: 'text', text: renderStep(finding) }];
-
-      if (screenshotB64 !== null) {
-        userContent.push({
-          type: 'image_url',
-          image_url: { url: `data:image/png;base64,${screenshotB64}` },
-        });
-      }
+    async dispatch(model, finding, screenshotB64) {
+      const config = getModelConfig(model);
+      const basePrompt = config.systemPrompt === 'cleaned' ? CLEANED_PROMPT : BASELINE_PROMPT;
 
       const timeoutMs = resolveTimeoutMs();
 
       const callModel = async (extraInstruction?: string): Promise<string> => {
         const systemContent = extraInstruction
-          ? systemPrompt + '\n\n' + extraInstruction
-          : systemPrompt;
+          ? basePrompt + '\n\n' + extraInstruction
+          : basePrompt;
+
+        const body = buildOpenRouterBody(model, finding, screenshotB64, systemContent, config);
 
         // Bound each fetch with an AbortController so a stalled provider call
         // cannot hold a dispatcher semaphore slot indefinitely.
@@ -158,14 +217,7 @@ export function makeOpenRouterProvider(): Provider {
               Authorization: `Bearer ${process.env.OPENROUTER_API_KEY ?? ''}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              model,
-              max_tokens: 1024,
-              messages: [
-                { role: 'system', content: systemContent },
-                { role: 'user', content: userContent },
-              ],
-            }),
+            body: JSON.stringify(body),
             signal: controller.signal,
           });
         } catch (err) {
@@ -178,8 +230,8 @@ export function makeOpenRouterProvider(): Provider {
         }
 
         if (!resp.ok) {
-          const body = await resp.text().catch(() => '');
-          throw new Error(`OpenRouter ${resp.status} ${resp.statusText}: ${body.slice(0, 500)}`);
+          const respBody = await resp.text().catch(() => '');
+          throw new Error(`OpenRouter ${resp.status} ${resp.statusText}: ${respBody.slice(0, 500)}`);
         }
 
         const data = (await resp.json()) as OpenRouterResponse;
@@ -234,7 +286,7 @@ function hashStrings(a: string, b: string): number {
 export function makeMockProvider(): Provider {
   return {
     family: 'mock',
-    async dispatch(model, finding, _screenshotB64, _systemPrompt): Promise<ModelJudgment> {
+    async dispatch(model, finding, _screenshotB64): Promise<ModelJudgment> {
       const h = hashStrings(model, finding.step_id);
 
       // mock-a: passes everything with high confidence

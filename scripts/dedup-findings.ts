@@ -178,6 +178,12 @@ async function main(): Promise<void> {
         per_model_finding_counts: Object.fromEntries(
           [...meta.models].sort().map((m) => [m, 0]),
         ),
+        per_model_parse_error_counts: Object.fromEntries(
+          [...meta.models].sort().map((m) => [m, 0]),
+        ),
+        per_model_total_judgments: Object.fromEntries(
+          [...meta.models].sort().map((m) => [m, 0]),
+        ),
         dispatch_error_count: dispatch_errors.length,
         ...(meta.models.length === 1 ? { warning: 'single-model run' } : {}),
       },
@@ -204,6 +210,20 @@ async function main(): Promise<void> {
     perModelCounts[m] = 0;
   }
 
+  // Per-model parse-error counts (judgment.error set). Seed all models with 0
+  // so the report shows the full matrix even when no model errored.
+  const perModelParseErrorCounts: Record<string, number> = {};
+  for (const m of meta.models) {
+    perModelParseErrorCounts[m] = 0;
+  }
+
+  // Per-model total judgments returned (valid + errored). Used as the
+  // honest denominator for parse-error rate annotations. Seeded to 0.
+  const perModelTotalJudgments: Record<string, number> = {};
+  for (const m of meta.models) {
+    perModelTotalJudgments[m] = 0;
+  }
+
   // Cross-severity map: step_id -> Set of dedup_keys
   const stepKeyMap = new Map<string, Set<string>>();
 
@@ -219,11 +239,22 @@ async function main(): Promise<void> {
     // majority size per finding: how many agreed with the majority direction
     agreedPairs += Math.max(failCount, n - failCount);
 
-    // Per-model pass=false counts
+    // Per-model pass=false counts, parse-error counts, and total judgments.
     for (const [model, j] of Object.entries(finding.model_judgments)) {
-      if (!j.error && j.pass === false) {
+      if (!(model in perModelTotalJudgments)) {
+        // model not in meta.models (shouldn't happen, but be safe)
+        perModelTotalJudgments[model] = 0;
+      }
+      perModelTotalJudgments[model]++;
+      if (j.error) {
+        if (!(model in perModelParseErrorCounts)) {
+          perModelParseErrorCounts[model] = 0;
+        }
+        perModelParseErrorCounts[model]++;
+        continue;
+      }
+      if (j.pass === false) {
         if (!(model in perModelCounts)) {
-          // model not in meta.models (shouldn't happen, but be safe)
           perModelCounts[model] = 0;
         }
         perModelCounts[model]++;
@@ -317,11 +348,23 @@ async function main(): Promise<void> {
     perModelCountsSorted[k] = perModelCounts[k]!;
   }
 
+  const perModelParseErrorCountsSorted: Record<string, number> = {};
+  for (const k of Object.keys(perModelParseErrorCounts).sort()) {
+    perModelParseErrorCountsSorted[k] = perModelParseErrorCounts[k]!;
+  }
+
+  const perModelTotalJudgmentsSorted: Record<string, number> = {};
+  for (const k of Object.keys(perModelTotalJudgments).sort()) {
+    perModelTotalJudgmentsSorted[k] = perModelTotalJudgments[k]!;
+  }
+
   const stats: DedupedRun['stats'] = {
     total_raw: totalRaw,
     after_dedup: findings.length,
     agreement_rate: agreementRate,
     per_model_finding_counts: perModelCountsSorted,
+    per_model_parse_error_counts: perModelParseErrorCountsSorted,
+    per_model_total_judgments: perModelTotalJudgmentsSorted,
     dispatch_error_count: dispatch_errors.length,
     ...(meta.models.length === 1 ? { warning: 'single-model run' } : {}),
   };

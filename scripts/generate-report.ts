@@ -621,6 +621,30 @@ async function main(): Promise<void> {
     .join(', ');
   lines.push(`- Per-model fail counts: ${perModelStr || 'none'}`);
 
+  // Per-model parse-error counts. Annotate '(degraded)' when a model's
+  // parse-error rate exceeds 20% of judgments the model actually returned.
+  // The denominator is per_model_total_judgments[m] (valid + errored),
+  // populated by the dedup pass. This excludes (finding, model) pairs
+  // where the model had no entry at all (e.g. matrix-level dispatch_errors),
+  // so the rate reflects "of the judgments that came back, what fraction
+  // failed to parse" rather than "of the dispatches attempted".
+  // Defensive read with ?? {} so the report does not crash on an older
+  // findings.deduped.json that predates these stats fields.
+  const parseErrorCounts = stats.per_model_parse_error_counts ?? {};
+  const totalJudgments = stats.per_model_total_judgments ?? {};
+  const parseErrorEntries = Object.entries(parseErrorCounts).sort(
+    ([a], [b]) => a.localeCompare(b),
+  );
+  const parseErrorStr = parseErrorEntries
+    .map(([m, errs]) => {
+      const denom = totalJudgments[m] ?? 0;
+      const rate = denom > 0 ? errs / denom : 0;
+      const degraded = rate > 0.2 ? ' (degraded)' : '';
+      return `${m} (${errs}/${denom})${degraded}`;
+    })
+    .join(', ');
+  lines.push(`- Per-model parse-error counts: ${parseErrorStr || 'none'}`);
+
   if (stats.dispatch_error_count > 0) {
     lines.push(`- Dispatch errors: ${stats.dispatch_error_count}`);
     const firstFive = dispatch_errors.slice(0, 5);
