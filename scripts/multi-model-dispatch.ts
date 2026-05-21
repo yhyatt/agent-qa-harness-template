@@ -13,7 +13,8 @@
  *                           When unset, the latest run under .qa-runs/ is used.
  *   QA_MODELS               comma-separated model list (default: anthropic/claude-sonnet-4-6,google/gemini-3.5-flash,openai/gpt-5).
  *                           Every real id must be an OpenRouter provider-prefixed id (`<provider>/<model>`).
- *   QA_DISPATCH_CONCURRENCY parallelism cap per provider family (default: 4)
+ *   QA_DISPATCH_CONCURRENCY parallelism cap on the OpenRouter dispatch path (default: 4).
+ *                           A separate semaphore caps the mock path at the same value.
  *   QA_DISPATCH_TIMEOUT_MS  per-call OpenRouter fetch deadline in ms (default: 60000)
  *   MOCK_DISPATCH           set to 1 to use the mock provider for all models
  *   QA_ALLOW_SINGLE_FAMILY  set to 1 to bypass ADR-002 single-family check (for testing)
@@ -274,7 +275,7 @@ async function main(): Promise<void> {
   if (!mockDispatch) {
     const realModels = models.filter((m) => !isMockModel(m));
 
-    const OPENROUTER_ID_PATTERN = /^[a-z0-9-]+\/[a-z0-9._-]+(?::[a-z0-9-]+)?$/i;
+    const OPENROUTER_ID_PATTERN = /^[a-z0-9-]+\/[a-z0-9._-]+(?::[a-z0-9-]+)?$/;
     const malformed = realModels.filter((m) => !OPENROUTER_ID_PATTERN.test(m));
     if (malformed.length > 0) {
       console.error(
