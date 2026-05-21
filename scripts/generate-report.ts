@@ -216,7 +216,11 @@ function renderFindingBody(
   }
 
   const axeLabel =
-    f.axe_violations < 0 ? 'scan failed' : `${f.axe_violations} violations`;
+    f.axe_violations === null
+      ? 'not scanned'
+      : f.axe_violations < 0
+        ? 'scan failed'
+        : `${f.axe_violations} violations`;
   const top3str =
     f.axe_top3.length > 0 ? ` (${f.axe_top3.slice(0, 3).map(escapeMarkdownInline).join(', ')})` : '';
   lines.push(`- Axe: ${axeLabel}${top3str}`);
@@ -413,21 +417,21 @@ async function main(): Promise<void> {
   if (axeSurfaces.length === 0) {
     // Aggregate unique routes from all findings that have axe violations or scan failures.
     // axe_violations === -1 means scan failed (not zero violations); include those distinctly.
+    // axe_violations === null means axe was not run on that step (ADR-013); skip those:
+    // they are not "scanned and clean", they were simply never attempted.
     const routeMap = new Map<string, { violations: number; top3: string[] }>();
     for (const f of allFindings) {
-      if (f.axe_violations !== 0) {
-        const route = f.step_id; // use step_id as route key since route is not available
-        const existing = routeMap.get(route);
-        if (!existing) {
-          routeMap.set(route, { violations: f.axe_violations, top3: f.axe_top3 });
-        } else if (f.axe_violations === -1) {
-          // scan failure takes precedence only if no positive count already recorded
-          if (existing.violations === 0) {
-            routeMap.set(route, { violations: f.axe_violations, top3: f.axe_top3 });
-          }
-        } else if (f.axe_violations > existing.violations) {
-          routeMap.set(route, { violations: f.axe_violations, top3: f.axe_top3 });
-        }
+      if (f.axe_violations === null || f.axe_violations === 0) continue;
+      const violations = f.axe_violations;
+      const route = f.step_id; // use step_id as route key since route is not available
+      const existing = routeMap.get(route);
+      if (!existing) {
+        routeMap.set(route, { violations, top3: f.axe_top3 });
+      } else if (violations > existing.violations) {
+        // Keep the higher signal: a positive count beats a prior -1 (scan
+        // failure); a higher count beats a lower count. The zero case is
+        // never reached because zero is filtered out above.
+        routeMap.set(route, { violations, top3: f.axe_top3 });
       }
     }
     axeSurfaces = [...routeMap.entries()].map(([route, data]) => ({
@@ -614,6 +618,13 @@ async function main(): Promise<void> {
   lines.push(`- Total raw findings: ${stats.total_raw}`);
   lines.push(`- After dedup: ${stats.after_dedup}`);
   lines.push(`- Agreement rate: ${agreementDisplay}`);
+
+  // Skipped placeholder findings (auth-blocked etc). Defensive read so the
+  // report does not crash on a findings.deduped.json predating this field.
+  const skipped = meta.skipped ?? [];
+  if (skipped.length > 0) {
+    lines.push(`- Skipped placeholder findings: ${skipped.length} (auth-blocked, not dispatched)`);
+  }
 
   const perModelStr = Object.entries(stats.per_model_finding_counts)
     .sort(([a], [b]) => a.localeCompare(b))

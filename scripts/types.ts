@@ -46,6 +46,27 @@ export interface DispatchError {
   message: string;
 }
 
+/**
+ * A finding that the dispatcher chose not to send to any model.
+ *
+ * Today this only covers auth-blocked placeholder findings (INFO/pass with a
+ * title indicating the journey bailed because the auth fixture was absent).
+ * Skipped findings flow through dedup and report rendering as a count in
+ * meta.skipped; they never become DispatchedFinding entries.
+ */
+/**
+ * Reason a finding was skipped from dispatch. Today only one literal value
+ * is in use; future skip rules add new literals here so consumers can
+ * narrow on them exhaustively.
+ */
+export type SkipReason = 'auth-blocked-placeholder';
+
+export interface SkippedFinding {
+  step_id: string;
+  title: string;
+  reason: SkipReason;
+}
+
 export interface DispatchedRun {
   meta: {
     run_id: string;
@@ -53,6 +74,14 @@ export interface DispatchedRun {
     target: string;
     build: string;
     models: string[];
+    /**
+     * Findings the dispatcher chose not to send to any model. Sorted by
+     * step_id for determinism. Pass-through into DedupedRun so the final
+     * report can surface a count. Optional so older artifacts written
+     * before Slice 2 deserialize cleanly; consumers MUST use `meta.skipped
+     * ?? []` defensively when reading from disk.
+     */
+    skipped?: SkippedFinding[];
   };
   findings: DispatchedFinding[];
   dispatch_errors: DispatchError[];

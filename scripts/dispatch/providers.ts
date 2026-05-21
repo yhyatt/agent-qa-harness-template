@@ -336,15 +336,44 @@ export function makeMockProvider(): Provider {
       }
 
       // mock-c: passes everything but lowers confidence when axe_violations > 0
-      // Uses hash to produce slight variation in judgment text
-      const hasAxe = finding.axe_violations > 0;
-      const confidenceBase = hasAxe ? 0.55 : 0.85;
+      // Uses hash to produce slight variation in judgment text. Distinguishes
+      // three ADR-013 axe states: null (not run), 0 (ran clean), positive
+      // (violations). Each state gets its own prose so downstream reports do
+      // not falsely claim "no violations" when axe never ran.
+      const axe = finding.axe_violations;
+      const axeRan = axe !== null && axe >= 0;
+      const hasAxe = axeRan && axe > 0;
+      const confidenceBase = hasAxe ? 0.55 : axeRan ? 0.85 : 0.6;
       // Deterministic variation: use low bit of hash to shift confidence slightly
       const confidenceVariation = ((h % 10) - 5) * 0.01;
       const confidence = Math.max(
         0.1,
         Math.min(0.99, confidenceBase + confidenceVariation),
       );
+
+      let axeProse: string;
+      let axeConcerns: string[];
+      if (hasAxe) {
+        axeProse =
+          `However, ${axe} axe violation(s) were detected. ` +
+          `Without a live screenshot, confidence is reduced. ` +
+          `The violations listed are: ${finding.axe_top3.slice(0, 2).join('; ') || 'see axe_top3 field'}. ` +
+          `Recommend a manual review of accessibility issues before shipping.`;
+        axeConcerns = [
+          `${axe} axe violation(s) present: verify user impact before closing`,
+        ];
+      } else if (axeRan) {
+        axeProse =
+          `No axe violations detected. The locale snapshot and console output look clean. ` +
+          `The action completed without observed failures. Confidence is high.`;
+        axeConcerns = [];
+      } else {
+        // axe was not run on this step (null) or the scan errored (-1).
+        axeProse =
+          `Axe accessibility scan was not run for this step, so no a11y signal is available. ` +
+          `Verdict relies on locale snapshot and console output only.`;
+        axeConcerns = ['axe not scanned: cannot assess accessibility'];
+      }
 
       return {
         step_id: finding.step_id,
@@ -355,18 +384,8 @@ export function makeMockProvider(): Provider {
         judgment:
           `Mock model C judgment for step ${finding.step_id}. ` +
           `The step is assessed as passing. ` +
-          (hasAxe
-            ? `However, ${finding.axe_violations} axe violation(s) were detected. ` +
-              `Without a live screenshot, confidence is reduced. ` +
-              `The violations listed are: ${finding.axe_top3.slice(0, 2).join('; ') || 'see axe_top3 field'}. ` +
-              `Recommend a manual review of accessibility issues before shipping.`
-            : `No axe violations detected. The locale snapshot and console output look clean. ` +
-              `The action completed without observed failures. Confidence is high.`),
-        concerns: hasAxe
-          ? [
-              `${finding.axe_violations} axe violation(s) present: verify user impact before closing`,
-            ]
-          : [],
+          axeProse,
+        concerns: axeConcerns,
         confidence,
       };
     },

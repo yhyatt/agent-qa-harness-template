@@ -232,3 +232,28 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 **Supersedes:** the Anthropic-direct portion of ADR-002 v1. The cross-provider second-opinions policy in ADR-002 stays, restated against provider-prefixed ids.
 
 **Revisit if:** OpenRouter materially degrades, or a provider-direct feature (caching, batch) becomes load-bearing for cost or latency.
+
+## ADR-013: axe_violations is nullable
+
+**Decided:** `StepFinding.axe_violations` is now `number | null`. The default in `makeFinding` flips from `0` to `null`. The convention becomes:
+
+- `null`: axe was not run on this step
+- `0`: scanned, no violations
+- positive integer: scanned, that many violations
+- `-1`: scan failed mid-run (axe library threw)
+
+**Alternatives:** keep the `0 vs -1` two-state encoding, introduce a parallel `axe_attempted: boolean` field, move to a richer object shape.
+
+**Rationale:**
+
+- The previous `0 vs -1` encoding could not distinguish "scan not attempted" from "scan ran and clean". Most journey steps do not run axe (it is expensive and only meaningful at page-level boundaries). Conflating "skipped" with "clean" hid which routes actually had axe coverage.
+- Per HARNESS-FEEDBACK item 10, this masks coverage gaps in reports: a step that never called `runAxe()` looked identical to one that did and saw no issues.
+- A nullable column is the minimal schema widening that preserves all four states.
+
+**Trade-off:**
+
+- Existing findings.json files written before this slice deserialize fine. The number is a valid `number | null` value; older runs render as "0 violations" the same way they always did.
+- Consumers must handle null. The dispatcher prompt renderer prints "not scanned", the markdown report prints "not scanned", the mock-c provider uses `(axe_violations ?? 0) > 0` to keep its existing semantics. Any new consumer must add the null branch.
+- Schema lock (ADR-003) is widened, not narrowed. No migration step.
+
+**Revisit if:** a future slice moves `axe_violations` into a richer object shape with timestamp, ruleset version, or per-violation severity. The null state would carry over as "absent object".
