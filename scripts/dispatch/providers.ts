@@ -336,8 +336,10 @@ export function makeMockProvider(): Provider {
       }
 
       // mock-c: passes everything but lowers confidence when axe_violations > 0
-      // Uses hash to produce slight variation in judgment text
-      const hasAxe = finding.axe_violations > 0;
+      // Uses hash to produce slight variation in judgment text.
+      // The `?? 0` guards the null branch added in ADR-013 ("scan not run")
+      // so the no-axe-data case is treated like the zero-violation case.
+      const hasAxe = (finding.axe_violations ?? 0) > 0;
       const confidenceBase = hasAxe ? 0.55 : 0.85;
       // Deterministic variation: use low bit of hash to shift confidence slightly
       const confidenceVariation = ((h % 10) - 5) * 0.01;

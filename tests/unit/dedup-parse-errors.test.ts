@@ -102,6 +102,7 @@ describe('dedup per_model_parse_error_counts', () => {
         build: 'test',
         // intentionally unsorted to verify the dedup script sorts internally
         models: ['ok', 'flake-b', 'flake-a'],
+        skipped: [],
       },
       findings: [
         {

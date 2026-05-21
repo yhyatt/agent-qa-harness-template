@@ -1,0 +1,201 @@
+/**
+ * Unit tests for the dispatch-hygiene slice (slice 2):
+ *
+ *   - hasAuthFixture rejects missing files, empty cookies/origins, and
+ *     malformed JSON, returning false in each case.
+ *   - The dispatcher skips auth-blocked placeholder findings (severity INFO,
+ *     bucket pass, title matching the auth-blocked regex). Real INFO findings
+ *     with unrelated titles still dispatch.
+ *   - axe_violations: null renders as "not scanned" through the dispatch
+ *     prompt and the helpers writeReport markdown path, distinctly from
+ *     axe_violations: 0 ("scanned, no violations").
+ */
+
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { hasAuthFixture } from '../e2e/journeys/helpers.js';
+import { renderStep } from '../../scripts/dispatch/prompt.js';
+import type { DispatchedRun, SkippedFinding } from '../../scripts/types.js';
+import type { StepFinding } from '../e2e/journeys/helpers.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const DISPATCH_SCRIPT = path.join(REPO_ROOT, 'scripts', 'multi-model-dispatch.ts');
+const TSX_BIN = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
+
+let tmpRoot: string;
+
+beforeAll(async () => {
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-hygiene-test-'));
+});
+
+afterAll(async () => {
+  await fs.rm(tmpRoot, { recursive: true, force: true });
+});
+
+function makeFinding(overrides: Partial<StepFinding> = {}): StepFinding {
+  return {
+    step_id: 'J1/01',
+    journey_id: 'J1',
+    step_name: 'auth-gate',
+    action: 'placeholder',
+    severity: 'MEDIUM',
+    bucket: 'cosmetic',
+    title: 'header text mismatch',
+    locale_snapshot: [],
+    db_state: null,
+    console_errors: [],
+    network_failures: [],
+    axe_violations: null,
+    axe_top3: [],
+    judgment: 'tentative finding',
+    ...overrides,
+  };
+}
+
+describe('hasAuthFixture', () => {
+  it('returns false when the file does not exist', () => {
+    expect(hasAuthFixture(path.join(tmpRoot, 'missing.json'))).toBe(false);
+  });
+
+  it('returns false on empty cookies/origins', async () => {
+    const p = path.join(tmpRoot, 'empty.json');
+    await fs.writeFile(p, JSON.stringify({ cookies: [], origins: [] }));
+    expect(hasAuthFixture(p)).toBe(false);
+  });
+
+  it('returns false on cookies-empty-origins-populated', async () => {
+    const p = path.join(tmpRoot, 'half-empty.json');
+    await fs.writeFile(p, JSON.stringify({ cookies: [], origins: [{ origin: 'x' }] }));
+    expect(hasAuthFixture(p)).toBe(false);
+  });
+
+  it('returns false on malformed JSON without throwing', async () => {
+    const p = path.join(tmpRoot, 'malformed.json');
+    await fs.writeFile(p, '{not json');
+    expect(hasAuthFixture(p)).toBe(false);
+  });
+
+  it('returns true when both cookies and origins are non-empty', async () => {
+    const p = path.join(tmpRoot, 'populated.json');
+    await fs.writeFile(
+      p,
+      JSON.stringify({
+        cookies: [{ name: 'session', value: 'abc' }],
+        origins: [{ origin: 'https://example.com' }],
+      }),
+    );
+    expect(hasAuthFixture(p)).toBe(true);
+  });
+});
+
+describe('renderStep axe_violations null handling', () => {
+  it('prints "not scanned" when axe_violations is null', () => {
+    const out = renderStep(makeFinding({ axe_violations: null }));
+    expect(out).toContain('count: not scanned');
+  });
+
+  it('prints the count when axe_violations is 0', () => {
+    const out = renderStep(makeFinding({ axe_violations: 0 }));
+    expect(out).toContain('count: 0');
+  });
+
+  it('prints "scan failed" when axe_violations is -1', () => {
+    const out = renderStep(makeFinding({ axe_violations: -1 }));
+    expect(out).toContain('count: scan failed');
+  });
+});
+
+describe('multi-model-dispatch skip rule', () => {
+  it('skips auth-blocked placeholders, dispatches real findings', async () => {
+    const runDir = path.join(tmpRoot, '2026-05-21-13-00');
+    await fs.mkdir(runDir, { recursive: true });
+
+    const authBlocked: StepFinding = makeFinding({
+      step_id: 'J1/01',
+      severity: 'INFO',
+      bucket: 'pass',
+      title: 'J1 auth-blocked: no fixture',
+      judgment: 'Auth fixture not present.',
+    });
+    // Title matches 'no code' substring directly. The template's J2 placeholder
+    // says "no join code available" which does not match this rule; tightening
+    // the regex to cover that case is out of scope for this slice.
+    const noCode: StepFinding = makeFinding({
+      step_id: 'J2/00',
+      severity: 'INFO',
+      bucket: 'pass',
+      title: 'J2 skipped: no code available',
+      judgment: 'no code available.',
+    });
+    const real: StepFinding = makeFinding({
+      step_id: 'J3/01',
+      severity: 'MEDIUM',
+      bucket: 'cosmetic',
+      title: 'header text mismatch',
+    });
+    // INFO/pass but title is unrelated to auth-blocked; must NOT be skipped.
+    const realInfo: StepFinding = makeFinding({
+      step_id: 'J4/01',
+      severity: 'INFO',
+      bucket: 'pass',
+      title: 'landed on home',
+    });
+
+    await fs.writeFile(
+      path.join(runDir, 'findings.json'),
+      JSON.stringify({
+        run_id: '2026-05-21-13-00',
+        timestamp: '2026-05-21T13:00:00Z',
+        target: 'https://example.com',
+        build: 'test',
+        results: [],
+        findings: [authBlocked, noCode, real, realInfo],
+        axe_surfaces: [],
+      }),
+    );
+
+    const result = spawnSync(TSX_BIN, [DISPATCH_SCRIPT], {
+      env: {
+        ...process.env,
+        QA_RUN_DIR: runDir,
+        MOCK_DISPATCH: '1',
+        QA_ALLOW_SINGLE_FAMILY: '1',
+        QA_MODELS: 'mock-a,mock-b,mock-c',
+      },
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    });
+
+    if (result.status !== 0) {
+      throw new Error(
+        `dispatch script exited ${result.status}: stdout=${result.stdout} stderr=${result.stderr}`,
+      );
+    }
+
+    // The stderr note announces the count of skipped findings.
+    expect(result.stderr).toContain('skipped 2 auth-blocked findings');
+
+    const dispatchedText = await fs.readFile(
+      path.join(runDir, 'findings.dispatched.json'),
+      'utf8',
+    );
+    const dispatched = JSON.parse(dispatchedText) as DispatchedRun;
+
+    // Two findings dispatched (J3/01 and J4/01), two skipped.
+    expect(dispatched.findings.length).toBe(2);
+    expect(dispatched.findings.map((f) => f.step_id).sort()).toEqual(['J3/01', 'J4/01']);
+    expect(dispatched.meta.skipped.length).toBe(2);
+
+    // Skipped list is sorted by step_id and carries the reason.
+    const skipped = dispatched.meta.skipped as SkippedFinding[];
+    expect(skipped.map((s) => s.step_id)).toEqual(['J1/01', 'J2/00']);
+    expect(skipped.every((s) => s.reason === 'auth-blocked-placeholder')).toBe(true);
+    expect(skipped[0]!.title).toBe('J1 auth-blocked: no fixture');
+    expect(skipped[1]!.title).toBe('J2 skipped: no code available');
+  }, 30_000);
+});

@@ -145,7 +145,11 @@ export function renderStep(finding: StepFinding): string {
   lines.push('## Axe violations');
   lines.push('');
   const axeLabel =
-    finding.axe_violations < 0 ? 'scan failed' : `${finding.axe_violations}`;
+    finding.axe_violations === null
+      ? 'not scanned'
+      : finding.axe_violations < 0
+        ? 'scan failed'
+        : `${finding.axe_violations}`;
   lines.push(`count: ${axeLabel}`);
   if (finding.axe_top3.length > 0) {
     lines.push('top 3:');

@@ -73,8 +73,19 @@ export interface StepFinding {
   console_errors: string[];
   /** Network 4xx/5xx responses observed during the step. */
   network_failures: string[];
-  /** Count of axe-core violations on the page at this step. */
-  axe_violations: number;
+  /**
+   * Count of axe-core violations on the page at this step.
+   *
+   * Convention:
+   *   null: axe was not run on this step (default in makeFinding)
+   *   0: scanned, no violations
+   *   positive integer: scanned, that many violations
+   *   -1: scan failed mid-run (axe library threw)
+   *
+   * The null branch was introduced in ADR-013 to disambiguate "scan not
+   * attempted" from "scan ran and clean". Consumers must handle null.
+   */
+  axe_violations: number | null;
   /** Top 3 axe violations, formatted "id: description". */
   axe_top3: string[];
   /** Free-form agent prose explaining the judgment. */
@@ -173,8 +184,47 @@ export const AUTH_FIXTURE_PATH =
   process.env.QA_AUTH_FIXTURE_PATH ??
   path.resolve('tests/e2e/fixtures/host-auth.json');
 
-export function hasAuthFixture(path: string = AUTH_FIXTURE_PATH): boolean {
-  return fs.existsSync(path);
+/**
+ * Returns true only when the auth fixture file exists AND parses to a
+ * storageState with at least one cookie and one origin. An empty
+ * `{"cookies": [], "origins": []}` (or a malformed JSON file) is treated
+ * as missing; one stderr line records the downgrade so journeys gating
+ * on this signal are not silently mistaken about session presence.
+ */
+export function hasAuthFixture(fixturePath: string = AUTH_FIXTURE_PATH): boolean {
+  if (!fs.existsSync(fixturePath)) return false;
+
+  let text: string;
+  try {
+    text = fs.readFileSync(fixturePath, 'utf-8');
+  } catch (err) {
+    process.stderr.write(
+      `note: auth fixture present but unreadable (${String(err)}); treating as missing\n`,
+    );
+    return false;
+  }
+
+  let parsed: { cookies?: unknown; origins?: unknown };
+  try {
+    parsed = JSON.parse(text) as { cookies?: unknown; origins?: unknown };
+  } catch (err) {
+    process.stderr.write(
+      `note: auth fixture present but failed to parse (${err instanceof Error ? err.message : String(err)}); treating as missing\n`,
+    );
+    return false;
+  }
+
+  const cookies = Array.isArray(parsed.cookies) ? parsed.cookies : [];
+  const origins = Array.isArray(parsed.origins) ? parsed.origins : [];
+
+  if (cookies.length === 0 || origins.length === 0) {
+    process.stderr.write(
+      `note: auth fixture present but empty (cookies=${cookies.length}, origins=${origins.length}); treating as missing\n`,
+    );
+    return false;
+  }
+
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +243,7 @@ export function makeFinding(
     db_state: null,
     console_errors: [],
     network_failures: [],
-    axe_violations: 0,
+    axe_violations: null,
     axe_top3: [],
     ...partial,
   };
@@ -278,7 +328,11 @@ export function writeReport(
         lines.push('- Network failures: none');
       }
       const axeLabel =
-        f.axe_violations < 0 ? 'scan failed' : `${f.axe_violations} violations`;
+        f.axe_violations === null
+          ? 'not scanned'
+          : f.axe_violations < 0
+            ? 'scan failed'
+            : `${f.axe_violations} violations`;
       const top3str =
         f.axe_top3.length > 0 ? `: top 3: ${f.axe_top3.join(', ')}` : '';
       lines.push(`- Axe violations: ${axeLabel}${top3str}`);

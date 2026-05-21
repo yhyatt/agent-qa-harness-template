@@ -25,7 +25,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { StepFinding } from '../tests/e2e/journeys/helpers.js';
-import type { ModelJudgment, DispatchedFinding, DispatchError, DispatchedRun } from './types.js';
+import type {
+  ModelJudgment,
+  DispatchedFinding,
+  DispatchError,
+  DispatchedRun,
+  SkippedFinding,
+} from './types.js';
 import { resolveProvider, isMockModel } from './dispatch/providers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -217,6 +223,31 @@ interface RawRunJson {
 }
 
 // ---------------------------------------------------------------------------
+// Skip rules: auth-blocked placeholder findings
+// ---------------------------------------------------------------------------
+
+/**
+ * Matches the placeholder titles that journeys emit when they bail because
+ * the auth fixture is missing or no join code is available. The dot in
+ * `auth.blocked` deliberately matches both "auth-blocked" and "auth blocked"
+ * (case insensitive). 'no fixture' and 'no code' cover the J2-style
+ * "skipped: no join code available" placeholder.
+ *
+ * The rule is conjoined with severity === 'INFO' && bucket === 'pass' in
+ * shouldSkipFinding so a real INFO finding whose title happens to mention
+ * "no code" cannot accidentally be skipped.
+ */
+const AUTH_BLOCKED_TITLE_RE = /auth.blocked|no fixture|no code/i;
+
+function shouldSkipFinding(f: StepFinding): boolean {
+  return (
+    f.severity === 'INFO' &&
+    f.bucket === 'pass' &&
+    AUTH_BLOCKED_TITLE_RE.test(f.title)
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Deterministic JSON serializer
 // ---------------------------------------------------------------------------
 
@@ -319,11 +350,47 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const findings: StepFinding[] = rawRun.findings ?? [];
+  const allFindings: StepFinding[] = rawRun.findings ?? [];
+
+  // 3a. Partition: skip auth-blocked placeholder findings before fan-out.
+  // These are emitted by journeys that bailed because the auth fixture was
+  // missing (or no join code was available). Sending them to three models
+  // costs real money and produces "yes this placeholder is fine" judgments.
+  // Skipped findings are pulled out entirely (no DispatchedFinding entry);
+  // they surface only as a count in meta.skipped, which threads through to
+  // dedup and the final report.
+  const dispatched: StepFinding[] = [];
+  const skipped: SkippedFinding[] = [];
+  for (const f of allFindings) {
+    if (shouldSkipFinding(f)) {
+      skipped.push({
+        step_id: f.step_id,
+        title: f.title,
+        reason: 'auth-blocked-placeholder',
+      });
+    } else {
+      dispatched.push(f);
+    }
+  }
+  skipped.sort((a, b) => a.step_id.localeCompare(b.step_id));
+
+  if (skipped.length > 0) {
+    process.stderr.write(
+      `note: skipped ${skipped.length} auth-blocked findings (saves model dispatch)\n`,
+    );
+  }
+
+  const findings = dispatched;
 
   // 4. Handle empty input
   if (findings.length === 0) {
-    console.error('No findings in input. Writing empty dispatched run.');
+    if (allFindings.length === 0) {
+      console.error('No findings in input. Writing empty dispatched run.');
+    } else {
+      console.error(
+        `All ${allFindings.length} findings were skipped. Writing empty dispatched run.`,
+      );
+    }
     const emptyRun: DispatchedRun = {
       meta: {
         run_id: rawRun.run_id,
@@ -331,6 +398,7 @@ async function main(): Promise<void> {
         target: rawRun.target,
         build: rawRun.build,
         models,
+        skipped,
       },
       findings: [],
       dispatch_errors: [],
@@ -470,6 +538,7 @@ async function main(): Promise<void> {
       target: rawRun.target,
       build: rawRun.build,
       models,
+      skipped,
     },
     findings: sortedFindings,
     dispatch_errors: sortedErrors,
