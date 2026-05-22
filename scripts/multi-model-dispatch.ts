@@ -394,6 +394,22 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Reject inputs that pre-date ADR-015. The harness_sha field is required;
+  // older artifacts carry `meta.build` instead and would otherwise pass
+  // `undefined` through serialization, yielding "Harness SHA: undefined" in
+  // the rendered report and silently degrading run provenance.
+  if (typeof rawRun.harness_sha !== 'string' || rawRun.harness_sha.length === 0) {
+    const legacy = (rawRun as unknown as { build?: unknown }).build;
+    const detail =
+      typeof legacy === 'string' && legacy.length > 0
+        ? ` Found legacy meta.build='${legacy}'; ADR-015 renamed this to meta.harness_sha and the dispatcher does not back-compat the old name.`
+        : '';
+    console.error(
+      `findings.json at ${findingsPath} is missing meta.harness_sha (got ${JSON.stringify(rawRun.harness_sha)}).${detail} Re-run the journey to regenerate findings.json under the current schema.`,
+    );
+    process.exit(1);
+  }
+
   const allFindings: StepFinding[] = rawRun.findings ?? [];
 
   // 3a. Partition: skip auth-blocked placeholder findings before fan-out.

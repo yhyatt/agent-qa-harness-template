@@ -1,6 +1,6 @@
 # Example: Next.js + Supabase (Ballpark)
 
-TODO: link here once Ballpark's slice-14 (full multi-model dispatch) is live.
+The full worked example (journeys, adapter, fixtures) lands here once Ballpark's slice-14 (full multi-model dispatch) is wet-run validated. The `/__build` endpoint section below is the exception: it ships ahead of the rest because the harness depends on the convention at report time, so the snippet is canonical even before the broader example arrives.
 
 Reference materials in the interim:
 

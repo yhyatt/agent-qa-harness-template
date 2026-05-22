@@ -83,13 +83,13 @@ describe('parseBuildEndpointResponse', () => {
     expect(out.deployed_at).toBe('2026-05-22T12:00:00.000Z');
   });
 
-  it('returns both nulls when commit is missing', () => {
+  it('nulls only the commit field when commit is missing', () => {
     const out = parseBuildEndpointResponse({ deployedAt: '2026-05-22T12:00:00.000Z' });
     expect(out.commit).toBe(null);
     expect(out.deployed_at).toBe('2026-05-22T12:00:00.000Z');
   });
 
-  it('returns both nulls when deployedAt is missing', () => {
+  it('nulls only the deployed_at field when deployedAt is missing', () => {
     const out = parseBuildEndpointResponse({ commit: 'abc1234' });
     expect(out.commit).toBe('abc1234');
     expect(out.deployed_at).toBe(null);
@@ -106,7 +106,7 @@ describe('parseBuildEndpointResponse', () => {
     expect(out.deployed_at).toBe('2026-05-22T12:00:00.000Z');
   });
 
-  it('returns both nulls when commit is a number, not a string', () => {
+  it('nulls only the commit field when commit is a number, not a string', () => {
     const out = parseBuildEndpointResponse({
       commit: 12345,
       deployedAt: '2026-05-22T12:00:00.000Z',
@@ -115,7 +115,7 @@ describe('parseBuildEndpointResponse', () => {
     expect(out.deployed_at).toBe('2026-05-22T12:00:00.000Z');
   });
 
-  it('returns both nulls when deployedAt is a number, not a string', () => {
+  it('nulls only the deployed_at field when deployedAt is a number, not a string', () => {
     const out = parseBuildEndpointResponse({
       commit: 'abc1234',
       deployedAt: 1700000000,
@@ -124,7 +124,7 @@ describe('parseBuildEndpointResponse', () => {
     expect(out.deployed_at).toBe(null);
   });
 
-  it('returns both nulls for an empty-string commit', () => {
+  it('treats an empty-string commit as missing (nulls the commit field only)', () => {
     const out = parseBuildEndpointResponse({ commit: '', deployedAt: '2026-05-22T12:00:00.000Z' });
     expect(out.commit).toBe(null);
   });

@@ -327,8 +327,8 @@ The default PR CI gate should run `test:e2e:no-auth`, which needs no fixture and
 
 The harness records the deployment the journey actually hit so report consumers can pin a finding to a specific deployed build. Two independent capture paths populate the `target_deployment` field in the JSON sidecar:
 
-1. Runtime header capture (zero configuration on Vercel). The Playwright response listener reads `x-vercel-id` and `x-vercel-deployment-url` off the first navigation response. Both headers are set automatically by Vercel; non-Vercel hosts simply leave them null.
-2. Optional `/__build` endpoint (consumer-side opt-in). If the target app exposes `GET /__build` returning JSON of the shape `{ "commit": string, "deployedAt": string }`, the harness fetches it once at report time and surfaces the values as `build_commit` and `deployed_at`.
+1. Runtime header capture (zero configuration on Vercel). The Playwright response listener reads `x-vercel-id` and `x-vercel-deployment-url` off the main-frame document navigation response. The filter (`request.isNavigationRequest()` plus mainFrame plus `resourceType === 'document'`) makes sure a subresource or a cross-origin script cannot mis-attribute the deployment. Both headers are set automatically by Vercel; non-Vercel hosts simply leave them null.
+2. Optional `/__build` endpoint (consumer-side opt-in). If the target app exposes `GET /__build` returning JSON of the shape `{ "commit": string, "deployedAt": string }`, the harness fetches it once at report time and surfaces the values as `build_commit` and `deployed_at`. The parser resolves each field independently, so a valid `commit` survives a malformed `deployedAt` and vice versa. The fetch URL respects the target's base path (`https://host/app/__build`, not `https://host/__build` when the target is hosted under a subpath).
 
 On Vercel, the consuming app reads its own build identity from these envs:
 
@@ -336,13 +336,13 @@ On Vercel, the consuming app reads its own build identity from these envs:
 - `VERCEL_DEPLOYMENT_TARGET_URL` for the deployment URL (already covered by the x-vercel header above).
 - The deployment timestamp is typically derived from `VERCEL_DEPLOYMENT_ID` lookup or stored at build time; expose it as ISO 8601.
 
-If the endpoint is absent, returns non-2xx, returns non-JSON, or times out (3-second deadline), `build_commit` and `deployed_at` come back as null. The harness never fails a QA run on this path; it is identity capture, not gating.
+If the endpoint is absent, returns non-2xx, returns non-JSON, or times out (3-second deadline), `build_commit` and `deployed_at` come back as null. When the endpoint responds but one field is missing or malformed, only that one resolves to null. The harness never fails a QA run on this path; it is identity capture, not gating.
 
 The resulting report header reads:
 
 ```
 Target: https://app.example.com
-Target deployment: abc1234 Vercel iad1::xyz deployed 2026-05-22T11:30:00.000Z
+Target deployment: abc1234, Vercel iad1::xyz, deployed 2026-05-22T11:30:00.000Z, captured 2026-05-22T11:31:14.027Z
 Harness SHA: f270b74
 ```
 

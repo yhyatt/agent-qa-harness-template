@@ -93,6 +93,26 @@ export interface TargetDeployment {
   deployed_at: string | null;
 }
 
+/**
+ * Renders a TargetDeployment as a single markdown header line. Shared by the
+ * journey-runtime sidecar (helpers.ts writeReport) and the post-dispatch
+ * report (generate-report.ts), so the two stay in sync as fields are added.
+ * Emits "unknown" when the field is null (older artifacts, or no journey
+ * ran). Otherwise composes a comma-separated description of every non-null
+ * sub-field, always including captured_at so the orchestration-time stamp
+ * disambiguates capture from build and deploy timestamps.
+ */
+export function formatTargetDeploymentLine(td: TargetDeployment | null): string {
+  if (td === null) return 'unknown';
+  const parts: string[] = [];
+  if (td.build_commit !== null) parts.push(td.build_commit);
+  if (td.vercel_id !== null) parts.push(`Vercel ${td.vercel_id}`);
+  if (td.deployment_url !== null) parts.push(td.deployment_url);
+  if (td.deployed_at !== null) parts.push(`deployed ${td.deployed_at}`);
+  parts.push(`captured ${td.captured_at}`);
+  return parts.join(', ');
+}
+
 export interface DispatchedRun {
   meta: {
     run_id: string;

@@ -17,6 +17,7 @@
 
 import { type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
+import { formatTargetDeploymentLine, type TargetDeployment } from '../../../scripts/types.js';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -204,19 +205,28 @@ export function attachListeners(page: Page): PageListeners {
       networkFailures.push(`${status} ${response.url()}`);
     }
 
-    // Capture the first response's Vercel identity. Subsequent responses
-    // are ignored on purpose: we want the deployment the journey first hit,
-    // not whatever was last contacted. Wrapped defensively because some
-    // Playwright responses can throw on .headers() under unusual conditions.
+    // Capture target deployment identity from the main-frame document
+    // navigation response only. Filtering matters: an unconditional
+    // page.on('response') listener can latch onto a subresource (script,
+    // image, fetch/XHR) or a cross-origin Vercel app that the page pulls
+    // in, which then misattributes meta.target_deployment to the wrong
+    // deployment and defeats the chronology goal of this capture.
+    //
+    // request.isNavigationRequest() stays true through the entire redirect
+    // chain, so combined with mainFrame + resourceType 'document' it picks
+    // the resolved HTML response. We capture once and freeze; if the target
+    // is not on Vercel, vercel_id and deployment_url stay null and that is
+    // the correct signal (build_commit / deployed_at from /__build cover the
+    // non-Vercel case separately).
     if (capturedTargetDeployment === null) {
       try {
-        const headerBag = response.headers();
-        const parsed = parseVercelHeaders(headerBag);
-        // Only commit if at least one header was present; otherwise wait for
-        // a later response that might carry them (some hosts attach Vercel
-        // headers only to the page document, not to every sub-resource).
-        if (parsed.vercel_id !== null || parsed.deployment_url !== null) {
-          capturedTargetDeployment = parsed;
+        const request = response.request();
+        if (
+          request.isNavigationRequest() &&
+          response.frame() === page.mainFrame() &&
+          request.resourceType() === 'document'
+        ) {
+          capturedTargetDeployment = parseVercelHeaders(response.headers());
         }
       } catch {
         // never let header capture fail a journey
@@ -244,9 +254,10 @@ export interface BuildEndpointResult {
 }
 
 /**
- * Pure response-body parser for the /__build convention. Returns both nulls
- * unless the input is an object with a string `commit` AND a string
- * `deployedAt`. Exported for unit testing.
+ * Pure response-body parser for the /__build convention. Each field resolves
+ * independently: a valid `commit` string survives even when `deployedAt` is
+ * missing or malformed, and vice versa. Returns both nulls only when the
+ * input is not an object at all. Exported for unit testing.
  */
 export function parseBuildEndpointResponse(body: unknown): BuildEndpointResult {
   if (body === null || typeof body !== 'object') {
@@ -260,14 +271,22 @@ export function parseBuildEndpointResponse(body: unknown): BuildEndpointResult {
 }
 
 /**
- * Fetches GET /__build off the target URL with a 3-second deadline.
+ * Fetches GET /__build off the target URL with a 3-second deadline. The
+ * abort signal propagates through `res.json()` (fetch spec), so the body
+ * read is bounded by the same deadline as the request head. Per-field
+ * semantics follow `parseBuildEndpointResponse` (independent resolution).
  * Returns both nulls on any failure mode (DNS, network, non-2xx, non-JSON,
- * missing fields, timeout). Never throws.
+ * timeout). Never throws.
  */
 export async function fetchBuildEndpoint(targetUrl: string): Promise<BuildEndpointResult> {
+  // Resolve the endpoint relative to the target's base path. A leading-slash
+  // URL ('/__build') would reset to the origin root and miss apps hosted
+  // under a subpath like `https://host/app/`. Force a trailing slash on the
+  // base so `new URL('__build', base)` respects the path segments.
   let endpoint: string;
   try {
-    endpoint = new URL('/__build', targetUrl).toString();
+    const base = targetUrl.endsWith('/') ? targetUrl : targetUrl + '/';
+    endpoint = new URL('__build', base).toString();
   } catch {
     return { commit: null, deployed_at: null };
   }
@@ -392,29 +411,6 @@ export function makeFinding(
 // Report writer
 // ---------------------------------------------------------------------------
 
-interface TargetDeploymentLine {
-  vercel_id: string | null;
-  deployment_url: string | null;
-  captured_at: string;
-  build_commit: string | null;
-  deployed_at: string | null;
-}
-
-/**
- * Renders the target_deployment object as a single markdown header line.
- * Falls back to "unknown" when the field is null (no journey ran) or every
- * sub-field is null (non-Vercel host with no /__build endpoint).
- */
-function formatTargetDeploymentLine(td: TargetDeploymentLine | null): string {
-  if (td === null) return 'unknown';
-  const parts: string[] = [];
-  if (td.build_commit !== null) parts.push(td.build_commit);
-  if (td.vercel_id !== null) parts.push(`Vercel ${td.vercel_id}`);
-  if (td.deployment_url !== null) parts.push(td.deployment_url);
-  if (td.deployed_at !== null) parts.push(`deployed ${td.deployed_at}`);
-  return parts.length > 0 ? parts.join(' ') : 'unknown';
-}
-
 export async function writeReport(
   results: JourneyResult[],
   axeSurfaces: AxeSurface[],
@@ -429,10 +425,10 @@ export async function writeReport(
     // not in a git checkout, or git unavailable
   }
 
-  // Kick the /__build fetch off in parallel with the rest of report assembly.
-  // The 3-second abort fires from inside fetchBuildEndpoint, so even if every
-  // other branch is instant, the whole writeReport finishes within ~3s of the
-  // fetch starting. Failures resolve to (null, null), never throw.
+  // Fire the /__build fetch eagerly; the synchronous composition below runs
+  // while it's in flight. The 3-second abort fires from inside
+  // fetchBuildEndpoint, so the await below is bounded by that deadline.
+  // Failures resolve to (null, null), never throw.
   const buildEndpointPromise = fetchBuildEndpoint(targetUrl);
 
   // Compose the target_deployment record. Even when both Vercel headers were
@@ -443,13 +439,6 @@ export async function writeReport(
   const journeyRan = results.length > 0;
   const buildEndpoint = await buildEndpointPromise;
 
-  type TargetDeployment = {
-    vercel_id: string | null;
-    deployment_url: string | null;
-    captured_at: string;
-    build_commit: string | null;
-    deployed_at: string | null;
-  };
   let targetDeployment: TargetDeployment | null = null;
   if (journeyRan || headers !== null) {
     targetDeployment = {
