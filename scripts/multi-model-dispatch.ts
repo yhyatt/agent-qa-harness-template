@@ -74,9 +74,18 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
 
 // Path-safety pattern: accepts timestamp run-ids (e.g. 2026-05-22-14-30) and
 // semantic run-ids (e.g. overnight-2026-05-22). Rejects characters that would
-// break path handling. The .qa-runs/ scan tolerates the wider pattern because
-// run directories are the only entries written there.
-const RUN_DIR_PATTERN = /^[a-z0-9._-]+$/i;
+// break path handling. The lookahead requires at least one alphanumeric, which
+// rejects dot-segments ('.', '..', '...') so they fall through to the
+// explicit-path branch in resolveRunDir instead of being joined into .qa-runs/.
+const RUN_DIR_PATTERN = /^(?=.*[a-z0-9])[a-z0-9._-]+$/i;
+
+// .qa-runs/ also houses utility directories that match the path-safety
+// regex but are not runs (playwright-output/ from the JSON reporter and
+// userDataDir/ from populate-auth). Exclude them from the latest-run scan
+// so that when latest.txt is missing or stale, the fallback does not pick
+// one (lexicographic sort would otherwise prefer playwright-output over
+// timestamped run-ids).
+const RUN_DIR_DENYLIST = new Set(['playwright-output', 'userDataDir']);
 
 /**
  * Resolves the run directory from the QA_RUN_DIR env value.
@@ -141,11 +150,11 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  // Filter to valid run dirs only; .qa-runs/ also contains latest.txt and
-  // playwright-output/. Use withFileTypes to also exclude non-directory entries
-  // like latest.txt.
+  // Filter to valid run dirs only. .qa-runs/ also contains latest.txt
+  // (excluded by isDirectory) and the utility dirs in RUN_DIR_DENYLIST
+  // (playwright-output/, userDataDir/).
   const valid = rawEntries
-    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(

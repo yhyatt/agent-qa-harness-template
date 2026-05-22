@@ -22,9 +22,17 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 // Find latest run directory (copied from dedup-findings.ts; not exported there).
 // The pattern is path-safety only: it accepts both timestamp run-ids
 // (e.g. 2026-05-22-14-30) and semantic run-ids (e.g. overnight-2026-05-22).
+// The lookahead requires at least one alphanumeric, which rejects dot-segments
+// ('.', '..', '...') so they fall through to the explicit-path branch in
+// resolveRunDir instead of being joined into .qa-runs/.
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^[a-z0-9._-]+$/i;
+const RUN_DIR_PATTERN = /^(?=.*[a-z0-9])[a-z0-9._-]+$/i;
+
+// .qa-runs/ also houses utility directories that match the path-safety
+// regex but are not runs. Exclude them from the latest-run scan so that
+// when latest.txt is missing or stale, the fallback does not pick one.
+const RUN_DIR_DENYLIST = new Set(['playwright-output', 'userDataDir']);
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -53,7 +61,7 @@ async function findLatestRunDir(): Promise<string> {
     );
   }
   const valid = rawEntries
-    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(

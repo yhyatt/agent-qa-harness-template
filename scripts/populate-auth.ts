@@ -137,10 +137,14 @@ async function runCdpMode(): Promise<void> {
       console.error('  chrome.exe --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir=C:\\Temp\\qa-chrome-profile');
       console.error('Find your WSL gateway IP with: ip route | grep default');
       console.error('Then re-run with: QA_AUTH_CDP_URL=http://<gateway-ip>:9222 npm run populate-auth');
-      console.error('');
+    } else if (process.platform === 'win32') {
+      console.error('On Windows, start Chrome from cmd.exe or PowerShell:');
+      console.error('  chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\Temp\\qa-chrome-profile');
+      console.error('Ensure no other Chrome instance owns the same profile directory.');
+    } else {
+      console.error('On macOS or native Linux, ensure no other Chrome instance owns the default profile:');
+      console.error('  google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile');
     }
-    console.error('On macOS/Linux native: ensure no other Chrome instance owns the default profile.');
-    console.error('  google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile');
     console.error('');
     console.error(
       'On Chrome 136+, --remote-debugging-port is ignored on the default profile; the --user-data-dir flag is required.',

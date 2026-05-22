@@ -149,13 +149,23 @@ await Promise.race([
 
 **Why it fails:** `Promise.race` does not cancel the loser. If `waitForURL` resolves quickly the race resolves quickly, but the dangling `waitForTimeout` still ticks in the background. If `waitForURL` never matches, the race resolves at N with no signal whether the navigation happened. Chain three of these and each step's worst case compounds toward `test.setTimeout`, the only real cap. The race idiom looks like a deadline. It is not.
 
-**Do instead:** put the timeout on the operation that has one.
+**Do instead:** put the timeout on the operation that has one, and decide explicitly whether the navigation is mandatory or optional. If mandatory, let `waitForURL` throw and surface a finding. If optional, record the skip rather than swallow it.
 
 ```ts
-await page.waitForURL(/\/game\//, { timeout: 8_000 }).catch(() => {});
+// Mandatory navigation: let it throw, the test fails loudly.
+await page.waitForURL(/\/game\//, { timeout: 8_000 });
+
+// Optional navigation: record what happened, do not swallow it.
+const navigated = await page
+  .waitForURL(/\/game\//, { timeout: 8_000 })
+  .then(() => true)
+  .catch((err) => {
+    listeners.errors.push(`waitForURL timed out: ${err.message}`);
+    return false;
+  });
 ```
 
-`Promise.race` is for genuinely concurrent operations where you want the winner's value, not for "give up after N seconds."
+`Promise.race` is for genuinely concurrent operations where you want the winner's value, not for "give up after N seconds." A bare `.catch(() => {})` here would also fall into anti-pattern 14.
 
 ## 16. Asserting visibility immediately after `domcontentloaded`
 
