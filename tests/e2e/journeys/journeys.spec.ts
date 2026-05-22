@@ -427,5 +427,5 @@ test.describe('J4: static surface walk', () => {
 // ---------------------------------------------------------------------------
 
 test.afterAll(async () => {
-  writeReport(journeyResults, axeSurfaces, BASE);
+  await writeReport(journeyResults, axeSurfaces, BASE);
 });

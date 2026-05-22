@@ -13,7 +13,12 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DedupedRun, DedupedFinding } from './types.js';
+import { formatTargetDeploymentLine } from './types.js';
 import type { Severity, AxeSurface } from '../tests/e2e/journeys/helpers.js';
+
+// ---------------------------------------------------------------------------
+// Target-deployment header rendering (ADR-015 / B-HARNESS-8)
+// ---------------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -551,7 +556,8 @@ async function main(): Promise<void> {
   lines.push(`# QA run: ${meta.timestamp}`);
   lines.push('');
   lines.push(`Target: ${meta.target}`);
-  lines.push(`Build: ${meta.build}`);
+  lines.push(`Target deployment: ${formatTargetDeploymentLine(meta.target_deployment ?? null)}`);
+  lines.push(`Harness SHA: ${meta.harness_sha}`);
   lines.push(`Run dir: ${runDir}`);
   lines.push(`Models: ${meta.models.length > 0 ? meta.models.join(', ') : '(none)'}`);
 
