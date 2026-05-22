@@ -25,11 +25,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
-// Find latest run directory (mirrors multi-model-dispatch.ts:
-// regex filter ensures only valid YYYY-MM-DD-HH-MM entries are considered)
+// Find latest run directory (mirrors multi-model-dispatch.ts).
+// The pattern is path-safety only: it accepts both timestamp run-ids
+// (e.g. 2026-05-22-14-30) and semantic run-ids (e.g. overnight-2026-05-22)
+// while rejecting characters that would break path handling.
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+const RUN_DIR_PATTERN = /^[a-z0-9._-]+$/i;
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -62,10 +64,12 @@ async function findLatestRunDir(): Promise<string> {
     .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
+      `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
     );
   }
-  // Sort lexicographically; the timestamp format sorts correctly
+  // Sort lexicographically. Timestamp run-ids (YYYY-MM-DD-HH-MM) sort by recency;
+  // semantic names sort by name and interleave with the timestamps. Use the
+  // .qa-runs/latest.txt pointer above for an authoritative "most recent" signal.
   const sorted = valid.sort();
   return path.join(base, sorted[sorted.length - 1]!);
 }

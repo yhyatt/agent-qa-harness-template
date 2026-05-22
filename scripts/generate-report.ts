@@ -19,10 +19,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
-// Find latest run directory (copied from dedup-findings.ts; not exported there)
+// Find latest run directory (copied from dedup-findings.ts; not exported there).
+// The pattern is path-safety only: it accepts both timestamp run-ids
+// (e.g. 2026-05-22-14-30) and semantic run-ids (e.g. overnight-2026-05-22).
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+const RUN_DIR_PATTERN = /^[a-z0-9._-]+$/i;
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -55,7 +57,7 @@ async function findLatestRunDir(): Promise<string> {
     .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
+      `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
     );
   }
   const sorted = valid.sort();
@@ -71,10 +73,13 @@ async function findLatestRunDir(): Promise<string> {
  *
  * Accepted forms (applied in order):
  *  1. Undefined or empty -> use findLatestRunDir().
- *  2. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
- *  3. Contains '/' or '\', starts with '.' or '/': treated as a path;
+ *  2. Path-safe run-id matching RUN_DIR_PATTERN (timestamps like
+ *     2026-05-22-14-30 and semantic names like overnight-2026-05-22):
+ *     resolved under .qa-runs/.
+ *  3. Contains '/' or '\\', starts with '.' or '/': treated as a path;
  *     relative paths resolved against REPO_ROOT.
- *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
+ *  4. Anything else (unsafe characters): treated as a run-id under
+ *     .qa-runs/ with a stderr note.
  */
 async function resolveRunDir(raw: string | undefined): Promise<string> {
   if (!raw) {
@@ -86,10 +91,10 @@ async function resolveRunDir(raw: string | undefined): Promise<string> {
   if (raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || raw.startsWith('/')) {
     return path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw);
   }
-  // Bare name: treat as run-id but warn
+  // Unsafe characters: treat as run-id but warn.
   process.stderr.write(
     `[report] note: interpreting QA_RUN_DIR='${raw}' as a run id under .qa-runs/. ` +
-      `Pass a full path or YYYY-MM-DD-HH-MM run-id to suppress this note.\n`,
+      `Pass a full path or a run-id matching [a-z0-9._-]+ to suppress this note.\n`,
   );
   return path.join(REPO_ROOT, '.qa-runs', raw);
 }

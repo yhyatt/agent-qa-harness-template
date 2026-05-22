@@ -72,27 +72,32 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
 // Find latest run directory / resolve QA_RUN_DIR
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+// Path-safety pattern: accepts timestamp run-ids (e.g. 2026-05-22-14-30) and
+// semantic run-ids (e.g. overnight-2026-05-22). Rejects characters that would
+// break path handling. The .qa-runs/ scan tolerates the wider pattern because
+// run directories are the only entries written there.
+const RUN_DIR_PATTERN = /^[a-z0-9._-]+$/i;
 
 /**
  * Resolves the run directory from the QA_RUN_DIR env value.
  *
  * Three forms are accepted:
- *  1. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
+ *  1. Path-safe run-id (matches `[a-z0-9._-]+`, e.g. `2026-05-22-14-30` or
+ *     `overnight-2026-05-22`): resolved under .qa-runs/.
  *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
  *     if not already absolute.
  *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
  */
 function resolveRunDir(envValue: string): string {
-  const TIMESTAMP_RE = RUN_DIR_PATTERN;
+  const RUN_DIR_RE = RUN_DIR_PATTERN;
   const isPath =
     envValue.includes('/') ||
     envValue.includes('\\') ||
     envValue.startsWith('.') ||
     envValue.startsWith('/');
 
-  if (TIMESTAMP_RE.test(envValue)) {
-    // Form 1: canonical run-id
+  if (RUN_DIR_RE.test(envValue)) {
+    // Form 1: path-safe run-id
     return path.join(REPO_ROOT, '.qa-runs', envValue);
   }
 
@@ -136,18 +141,19 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  // Filter to valid timestamp dirs only; .qa-runs/ also contains latest.txt and
-  // playwright-output/, both of which sort after digit-based timestamps.
-  // Use withFileTypes to also exclude non-directory entries like latest.txt.
+  // Filter to valid run dirs only; .qa-runs/ also contains latest.txt and
+  // playwright-output/. Use withFileTypes to also exclude non-directory entries
+  // like latest.txt.
   const valid = rawEntries
     .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
     .map((e) => e.name);
   if (valid.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
+      `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
     );
   }
-  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HH-MM) sorts correctly
+  // Sort lexicographically; timestamp run-ids (YYYY-MM-DD-HH-MM) sort correctly,
+  // and semantic names fall in alongside them.
   const sorted = valid.sort();
   return path.join(base, sorted[sorted.length - 1]!);
 }
