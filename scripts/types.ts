@@ -67,12 +67,51 @@ export interface SkippedFinding {
   reason: SkipReason;
 }
 
+/**
+ * Runtime-captured identity of the deployment a journey actually hit.
+ *
+ * Introduced in ADR-015 (B-HARNESS-8/9). Both pairs of fields are populated
+ * by independent capture paths:
+ *   - vercel_id / deployment_url: Playwright response listener on the first
+ *     navigation, reading x-vercel-id and x-vercel-deployment-url.
+ *   - build_commit / deployed_at: optional GET /__build fetch off the target
+ *     URL (consumer-side convention; see docs/CUSTOMIZATION.md).
+ *
+ * Any individual field may be null on a non-Vercel host or when the target
+ * app does not expose /__build. The outer field itself is null only when no
+ * journey ran AND no headers were captured. Consumers MUST use `??`
+ * defensively on every sub-field.
+ */
+export interface TargetDeployment {
+  vercel_id: string | null;
+  deployment_url: string | null;
+  /** ISO 8601 timestamp of when the headers were captured. */
+  captured_at: string;
+  /** From /__build response body; null if endpoint absent or unreadable. */
+  build_commit: string | null;
+  /** ISO 8601 from /__build response body; null if endpoint absent. */
+  deployed_at: string | null;
+}
+
 export interface DispatchedRun {
   meta: {
     run_id: string;
     timestamp: string;
     target: string;
-    build: string;
+    /**
+     * Short git SHA of the consuming repo at harness run time (the QA harness
+     * itself, NOT the target app). Renamed from `build` in ADR-015 after a
+     * downstream validator confused it for the target app's deployed commit.
+     * For target-app identity, see target_deployment.
+     */
+    harness_sha: string;
+    /**
+     * Identity of the deployment the journey hit. Optional on the type so
+     * older artifacts written before ADR-015 (Slice 6) deserialize cleanly;
+     * the harness always writes the field on fresh runs. Consumers MUST use
+     * `meta.target_deployment ?? null` defensively when reading from disk.
+     */
+    target_deployment?: TargetDeployment | null;
     models: string[];
     /**
      * Findings the dispatcher chose not to send to any model. Sorted by
@@ -103,7 +142,10 @@ export interface DedupedFinding extends DispatchedFinding {
 }
 
 export interface DedupedRun {
-  /** pass-through from DispatchedRun; preserves run_id, timestamp, target, build, models. */
+  /**
+   * Pass-through from DispatchedRun; preserves run_id, timestamp, target,
+   * harness_sha, target_deployment, models, and skipped.
+   */
   meta: DispatchedRun['meta'];
   unanimous_findings: DedupedFinding[];
   partial_findings: DedupedFinding[];

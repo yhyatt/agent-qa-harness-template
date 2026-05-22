@@ -159,7 +159,8 @@ describe('multi-model-dispatch skip rule', () => {
         run_id: '2026-05-21-13-00',
         timestamp: '2026-05-21T13:00:00Z',
         target: 'https://example.com',
-        build: 'test',
+        harness_sha: 'test',
+        target_deployment: null,
         results: [],
         findings: [authBlocked, noCode, real, realInfo],
         axe_surfaces: [],
@@ -196,6 +197,15 @@ describe('multi-model-dispatch skip rule', () => {
     // Two findings dispatched (J3/01 and J4/01), two skipped.
     expect(dispatched.findings.length).toBe(2);
     expect(dispatched.findings.map((f) => f.step_id).sort()).toEqual(['J3/01', 'J4/01']);
+
+    // ADR-015 / B-HARNESS-7: meta carries harness_sha, not the legacy `build`
+    // field. No back-compat reader; the rename is unconditional.
+    expect(dispatched.meta.harness_sha).toBe('test');
+    expect('build' in (dispatched.meta as Record<string, unknown>)).toBe(false);
+
+    // ADR-015 / B-HARNESS-8: meta carries target_deployment as a pass-through.
+    // In this fixture the input set it to null; the dispatcher preserves null.
+    expect(dispatched.meta.target_deployment ?? null).toBe(null);
 
     // meta.skipped is optional on the type for backwards compat with older
     // dispatched.json artifacts; the dispatcher always writes it, so we

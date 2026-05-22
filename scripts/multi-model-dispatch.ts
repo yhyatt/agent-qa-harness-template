@@ -31,6 +31,7 @@ import type {
   DispatchError,
   DispatchedRun,
   SkippedFinding,
+  TargetDeployment,
 } from './types.js';
 import { resolveProvider, isMockModel } from './dispatch/providers.js';
 
@@ -247,7 +248,19 @@ interface RawRunJson {
   run_id: string;
   timestamp: string;
   target: string;
-  build: string;
+  /**
+   * Short git SHA of the consuming repo at harness run time. Renamed from
+   * `build` in ADR-015. No back-compat reader for the legacy name: callers
+   * regenerate findings.json on every run, so older artifacts simply will
+   * not flow through this dispatcher unchanged.
+   */
+  harness_sha: string;
+  /**
+   * Runtime-captured identity of the deployment the journey hit. Optional
+   * because findings.json files written before ADR-015 do not include it.
+   * Consumers must use `?? null` defensively.
+   */
+  target_deployment?: TargetDeployment | null;
   results: unknown[];
   findings: StepFinding[];
   axe_surfaces: unknown[];
@@ -427,7 +440,8 @@ async function main(): Promise<void> {
         run_id: rawRun.run_id,
         timestamp: rawRun.timestamp,
         target: rawRun.target,
-        build: rawRun.build,
+        harness_sha: rawRun.harness_sha,
+        target_deployment: rawRun.target_deployment ?? null,
         models,
         skipped,
       },
@@ -567,7 +581,8 @@ async function main(): Promise<void> {
       run_id: rawRun.run_id,
       timestamp: rawRun.timestamp, // preserve from input, not regenerated
       target: rawRun.target,
-      build: rawRun.build,
+      harness_sha: rawRun.harness_sha,
+      target_deployment: rawRun.target_deployment ?? null,
       models,
       skipped,
     },

@@ -12,8 +12,29 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { DedupedRun, DedupedFinding } from './types.js';
+import type { DedupedRun, DedupedFinding, TargetDeployment } from './types.js';
 import type { Severity, AxeSurface } from '../tests/e2e/journeys/helpers.js';
+
+// ---------------------------------------------------------------------------
+// Target-deployment header rendering (ADR-015 / B-HARNESS-8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders the target_deployment record as a single header line. "unknown" is
+ * emitted when the field is null (older artifacts, or no journey ran) or
+ * when every sub-field is null (non-Vercel host, no /__build endpoint).
+ * Mirrors helpers.ts formatTargetDeploymentLine but operates on the
+ * pass-through type from DispatchedRun/DedupedRun.
+ */
+function renderTargetDeploymentLine(td: TargetDeployment | null): string {
+  if (td === null) return 'unknown';
+  const parts: string[] = [];
+  if (td.build_commit !== null) parts.push(td.build_commit);
+  if (td.vercel_id !== null) parts.push(`Vercel ${td.vercel_id}`);
+  if (td.deployment_url !== null) parts.push(td.deployment_url);
+  if (td.deployed_at !== null) parts.push(`deployed ${td.deployed_at}`);
+  return parts.length > 0 ? parts.join(' ') : 'unknown';
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -551,7 +572,8 @@ async function main(): Promise<void> {
   lines.push(`# QA run: ${meta.timestamp}`);
   lines.push('');
   lines.push(`Target: ${meta.target}`);
-  lines.push(`Build: ${meta.build}`);
+  lines.push(`Target deployment: ${renderTargetDeploymentLine(meta.target_deployment ?? null)}`);
+  lines.push(`Harness SHA: ${meta.harness_sha}`);
   lines.push(`Run dir: ${runDir}`);
   lines.push(`Models: ${meta.models.length > 0 ? meta.models.join(', ') : '(none)'}`);
 

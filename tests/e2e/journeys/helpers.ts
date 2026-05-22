@@ -137,6 +137,57 @@ export interface PageListeners {
   networkFailures: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Target-deployment header capture (B-HARNESS-8)
+//
+// We record the FIRST navigation response's Vercel identity headers so the
+// report can pin down which deployment the journey actually hit. Subsequent
+// responses do not overwrite the captured values; only the first matters
+// because that is the deployment the journey opened against. The state is
+// module-level on purpose (one harness process equals one report) but the
+// `__resetTargetDeployment` export exists so any in-process test that wants
+// a clean slate between fake runs can call it.
+// ---------------------------------------------------------------------------
+
+interface CapturedVercelHeaders {
+  vercel_id: string | null;
+  deployment_url: string | null;
+  captured_at: string;
+}
+
+let capturedTargetDeployment: CapturedVercelHeaders | null = null;
+
+/**
+ * Pure header parser. Reads x-vercel-id and x-vercel-deployment-url from a
+ * headers bag (the shape Playwright's response.headers() returns) and
+ * returns the captured pair plus an ISO timestamp. Missing headers come
+ * back as null on their respective fields; an empty bag returns both null.
+ * Exported for unit testing.
+ */
+export function parseVercelHeaders(
+  headers: Record<string, string>,
+  capturedAt: string = new Date().toISOString(),
+): CapturedVercelHeaders {
+  const vercelId = headers['x-vercel-id'];
+  const deploymentUrl = headers['x-vercel-deployment-url'];
+  return {
+    vercel_id: typeof vercelId === 'string' && vercelId.length > 0 ? vercelId : null,
+    deployment_url:
+      typeof deploymentUrl === 'string' && deploymentUrl.length > 0 ? deploymentUrl : null,
+    captured_at: capturedAt,
+  };
+}
+
+/** Accessor for the captured headers. Returns null when nothing has fired. */
+export function getTargetDeployment(): CapturedVercelHeaders | null {
+  return capturedTargetDeployment;
+}
+
+/** Test hygiene: clears module-level state between fake runs in a Vitest process. */
+export function __resetTargetDeployment(): void {
+  capturedTargetDeployment = null;
+}
+
 export function attachListeners(page: Page): PageListeners {
   const errors: string[] = [];
   const networkFailures: string[] = [];
@@ -152,9 +203,94 @@ export function attachListeners(page: Page): PageListeners {
     if (status >= 400) {
       networkFailures.push(`${status} ${response.url()}`);
     }
+
+    // Capture the first response's Vercel identity. Subsequent responses
+    // are ignored on purpose: we want the deployment the journey first hit,
+    // not whatever was last contacted. Wrapped defensively because some
+    // Playwright responses can throw on .headers() under unusual conditions.
+    if (capturedTargetDeployment === null) {
+      try {
+        const headerBag = response.headers();
+        const parsed = parseVercelHeaders(headerBag);
+        // Only commit if at least one header was present; otherwise wait for
+        // a later response that might carry them (some hosts attach Vercel
+        // headers only to the page document, not to every sub-resource).
+        if (parsed.vercel_id !== null || parsed.deployment_url !== null) {
+          capturedTargetDeployment = parsed;
+        }
+      } catch {
+        // never let header capture fail a journey
+      }
+    }
   });
 
   return { errors, networkFailures };
+}
+
+// ---------------------------------------------------------------------------
+// /__build endpoint (B-HARNESS-9)
+//
+// Optional consumer-side convention. If the target app exposes GET /__build
+// returning `{ commit, deployedAt }` (the consuming app reads
+// VERCEL_GIT_COMMIT_SHA and the deployment timestamp from its own runtime
+// env), the harness will surface the values in target_deployment. Anything
+// goes wrong (network error, non-2xx, non-JSON, missing fields, timeout):
+// return both nulls. Never throw.
+// ---------------------------------------------------------------------------
+
+export interface BuildEndpointResult {
+  commit: string | null;
+  deployed_at: string | null;
+}
+
+/**
+ * Pure response-body parser for the /__build convention. Returns both nulls
+ * unless the input is an object with a string `commit` AND a string
+ * `deployedAt`. Exported for unit testing.
+ */
+export function parseBuildEndpointResponse(body: unknown): BuildEndpointResult {
+  if (body === null || typeof body !== 'object') {
+    return { commit: null, deployed_at: null };
+  }
+  const obj = body as Record<string, unknown>;
+  const commit = typeof obj.commit === 'string' && obj.commit.length > 0 ? obj.commit : null;
+  const deployedAt =
+    typeof obj.deployedAt === 'string' && obj.deployedAt.length > 0 ? obj.deployedAt : null;
+  return { commit, deployed_at: deployedAt };
+}
+
+/**
+ * Fetches GET /__build off the target URL with a 3-second deadline.
+ * Returns both nulls on any failure mode (DNS, network, non-2xx, non-JSON,
+ * missing fields, timeout). Never throws.
+ */
+export async function fetchBuildEndpoint(targetUrl: string): Promise<BuildEndpointResult> {
+  let endpoint: string;
+  try {
+    endpoint = new URL('/__build', targetUrl).toString();
+  } catch {
+    return { commit: null, deployed_at: null };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const res = await fetch(endpoint, { signal: controller.signal });
+    if (!res.ok) {
+      return { commit: null, deployed_at: null };
+    }
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      return { commit: null, deployed_at: null };
+    }
+    return parseBuildEndpointResponse(body);
+  } catch {
+    return { commit: null, deployed_at: null };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,11 +392,34 @@ export function makeFinding(
 // Report writer
 // ---------------------------------------------------------------------------
 
-export function writeReport(
+interface TargetDeploymentLine {
+  vercel_id: string | null;
+  deployment_url: string | null;
+  captured_at: string;
+  build_commit: string | null;
+  deployed_at: string | null;
+}
+
+/**
+ * Renders the target_deployment object as a single markdown header line.
+ * Falls back to "unknown" when the field is null (no journey ran) or every
+ * sub-field is null (non-Vercel host with no /__build endpoint).
+ */
+function formatTargetDeploymentLine(td: TargetDeploymentLine | null): string {
+  if (td === null) return 'unknown';
+  const parts: string[] = [];
+  if (td.build_commit !== null) parts.push(td.build_commit);
+  if (td.vercel_id !== null) parts.push(`Vercel ${td.vercel_id}`);
+  if (td.deployment_url !== null) parts.push(td.deployment_url);
+  if (td.deployed_at !== null) parts.push(`deployed ${td.deployed_at}`);
+  return parts.length > 0 ? parts.join(' ') : 'unknown';
+}
+
+export async function writeReport(
   results: JourneyResult[],
   axeSurfaces: AxeSurface[],
   targetUrl: string,
-): void {
+): Promise<void> {
   const ts = new Date().toISOString();
 
   let gitSha = 'unknown';
@@ -268,6 +427,38 @@ export function writeReport(
     gitSha = execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
   } catch {
     // not in a git checkout, or git unavailable
+  }
+
+  // Kick the /__build fetch off in parallel with the rest of report assembly.
+  // The 3-second abort fires from inside fetchBuildEndpoint, so even if every
+  // other branch is instant, the whole writeReport finishes within ~3s of the
+  // fetch starting. Failures resolve to (null, null), never throw.
+  const buildEndpointPromise = fetchBuildEndpoint(targetUrl);
+
+  // Compose the target_deployment record. Even when both Vercel headers were
+  // missing (non-Vercel host) we emit an object with nulls instead of a bare
+  // null, because at least one journey ran. The outer field is null only if
+  // no journey ran at all (results is empty AND no headers were captured).
+  const headers = getTargetDeployment();
+  const journeyRan = results.length > 0;
+  const buildEndpoint = await buildEndpointPromise;
+
+  type TargetDeployment = {
+    vercel_id: string | null;
+    deployment_url: string | null;
+    captured_at: string;
+    build_commit: string | null;
+    deployed_at: string | null;
+  };
+  let targetDeployment: TargetDeployment | null = null;
+  if (journeyRan || headers !== null) {
+    targetDeployment = {
+      vercel_id: headers?.vercel_id ?? null,
+      deployment_url: headers?.deployment_url ?? null,
+      captured_at: headers?.captured_at ?? ts,
+      build_commit: buildEndpoint.commit,
+      deployed_at: buildEndpoint.deployed_at,
+    };
   }
 
   // JSON sidecar (source of truth for tooling)
@@ -279,7 +470,8 @@ export function writeReport(
         run_id: RUN_ID,
         timestamp: ts,
         target: targetUrl,
-        build: gitSha,
+        harness_sha: gitSha,
+        target_deployment: targetDeployment,
         results: results.map((r) => ({
           id: r.id,
           status: r.status,
@@ -298,7 +490,8 @@ export function writeReport(
   const lines: string[] = [
     `# QA run: ${ts}`,
     `Target: ${targetUrl}`,
-    `Build: ${gitSha}`,
+    `Target deployment: ${formatTargetDeploymentLine(targetDeployment)}`,
+    `Harness SHA: ${gitSha}`,
     `Run dir: ${RUN_DIR}`,
     '',
     '## Summary',

@@ -99,7 +99,8 @@ describe('dedup per_model_parse_error_counts', () => {
         run_id: '2026-05-21-12-00',
         timestamp: '2026-05-21T12:00:00Z',
         target: 'https://example.com',
-        build: 'test',
+        harness_sha: 'test',
+        target_deployment: null,
         // intentionally unsorted to verify the dedup script sorts internally
         models: ['ok', 'flake-b', 'flake-a'],
         skipped: [],

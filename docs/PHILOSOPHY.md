@@ -60,6 +60,29 @@ Per-step schema (canonical):
 }
 ```
 
+Per-run meta schema (ADR-015 update). The `meta` block on each `findings.dispatched.json` / `findings.deduped.json` carries three distinct identities so a downstream reader cannot confuse the harness's identity with the target app's deployed build:
+
+```json
+{
+  "meta": {
+    "run_id": "2026-05-22-19-00",
+    "timestamp": "2026-05-22T19:00:00.000Z",
+    "target": "https://app.example.com",
+    "harness_sha": "f270b74",
+    "target_deployment": {
+      "vercel_id": "iad1::abc123-1700000000000-deadbeef",
+      "deployment_url": "app-xyz.vercel.app",
+      "captured_at": "2026-05-22T19:00:01.234Z",
+      "build_commit": "abc1234",
+      "deployed_at": "2026-05-22T18:55:12.000Z"
+    },
+    "models": ["anthropic/claude-sonnet-4-6", "google/gemini-3.5-flash", "openai/gpt-5"]
+  }
+}
+```
+
+`harness_sha` is the QA harness repo's short git SHA. `target_deployment` is captured at journey runtime (Vercel headers) plus an optional `GET /__build` fetch off the target URL. Either pair of sub-fields may be null on a non-Vercel host or when the consumer does not expose `/__build`; the outer field is null only when no journey ran. See ADR-015 and `docs/CUSTOMIZATION.md` for the full convention.
+
 ## Why multi-model dispatch
 
 One model produces one opinion. One opinion has blind spots. Cross-model dispatch buys two things:

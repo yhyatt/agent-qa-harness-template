@@ -283,3 +283,28 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 - Codifying that Claude must not receive json-schema couples the harness to one OpenRouter backend quirk. If OpenRouter fixes the underlying Anthropic-backend bug, the Claude row can revert to json-schema and gain a small bump in score consistency. See the `Revisit if` clause.
 
 **Revisit if:** OpenRouter changes Anthropic-backend behavior; a target model is replaced by a new version; the finding schema in `docs/PHILOSOPHY.md` materially changes shape. Do not re-run for routine harness changes; the signal from the 144-cell run is durable.
+
+## ADR-015: Target-deployment identity in the report header
+
+**Decided:** The per-run report header now records three distinct identities (Target URL, Target deployment, Harness SHA) instead of one ambiguous `Build:` row. Three coupled changes ship together:
+
+1. Rename `meta.build` to `meta.harness_sha` in the JSON sidecar; rename the `Build:` row in the markdown header to `Harness SHA:`. No backward-compat reader for the legacy name.
+2. Capture `x-vercel-id` and `x-vercel-deployment-url` from the first journey navigation response into `meta.target_deployment.vercel_id` and `meta.target_deployment.deployment_url`. The field is optional on the type so older artifacts deserialize cleanly; consumers must use `?? null` defensively.
+3. Add an optional `/__build` convention. If the target app exposes `GET /__build` returning `{ commit, deployedAt }`, the harness fetches it at report time and surfaces the result as `target_deployment.build_commit` and `target_deployment.deployed_at`. Absent endpoint, network errors, non-JSON, timeouts, and missing fields all resolve to nulls; the harness never fails a QA run on this path.
+
+**Alternatives:** keep `Build:` and document the disambiguation in prose; capture headers but skip `/__build` and rely on header SHA prefixes; fetch `/__build` from a separate post-run script.
+
+**Rationale:**
+
+- The 2026-05-22 Ballpark wet run exposed a concrete failure: a downstream validator chased the `Build:` short SHA into the consuming repo's git history and confidently matched a superficially similar commit. The QA findings were valid; the chronology claim was wrong because the label was misleading and there was zero target-app identity in the report. Two distinct fields are the minimum to make the ambiguity disappear; three (target URL, headers, build endpoint) make findings reproducible against a specific deployment even months later.
+- Runtime header capture is the only correct timing. A separate post-run `curl` can race a redeploy and pin the report to the wrong build. The first navigation response carries the deployment identity unambiguously.
+- The schema is locked per AGENTS.md TL;DR #4, but the rename is template-internal: the four touch sites (`helpers.ts`, `multi-model-dispatch.ts`, `dedup-findings.ts`, `generate-report.ts`) all live in this repo, with no external consumers of the JSON. An in-place rename is cheaper than carrying a dual-name reader forever. The ADR records that decision and the absence of a migration step.
+- `/__build` is optional on purpose. It requires consumer cooperation (one route file, one env stamp) and the harness must work fine without it. The Next.js handler in `examples/nextjs-supabase/README.md` is the wet-run-validated stack; other-framework examples wait until a real project validates them, per the AGENTS.md examples rule (no example without wet-run validation).
+
+**Trade-off:**
+
+- The rename breaks any external consumer that read `meta.build`. There are none today; the audit confirmed only the four template-internal files touched the field. A future external consumer would need to migrate, but no migration step ships in this slice.
+- `writeReport` becomes async because the `/__build` fetch is awaited inline. The only caller in `tests/e2e/journeys/journeys.spec.ts` already lives in an async `test.afterAll`, so the ripple is one `await`.
+- Module-level state in `helpers.ts` holds the captured headers. One harness process equals one report, so the state is fine in production; an exported `__resetTargetDeployment` exists for in-process tests that need a clean slate.
+
+**Revisit if:** Vercel changes the names or semantics of `x-vercel-id` / `x-vercel-deployment-url`; the `/__build` convention attracts enough adoption to deserve a typed contract beyond the loose `{ commit, deployedAt }` shape; a non-Vercel host (Cloudflare, Fly) ships its own deployment identity headers that should be captured alongside the Vercel pair.
