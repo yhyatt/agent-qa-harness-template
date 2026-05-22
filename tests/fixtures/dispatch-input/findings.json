@@ -2,7 +2,7 @@
   "run_id": "2026-05-19-1900",
   "timestamp": "2026-05-19T19:00:00.000Z",
   "target": "https://staging.example.com",
-  "build": "abc1234",
+  "harness_sha": "abc1234",
   "results": [
     {
       "id": "J1",
