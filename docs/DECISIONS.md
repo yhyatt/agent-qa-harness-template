@@ -257,3 +257,29 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 - Schema lock (ADR-003) is widened, not narrowed. No migration step.
 
 **Revisit if:** a future slice moves `axe_violations` into a richer object shape with timestamp, ruleset version, or per-violation severity. The null state would carry over as "absent object".
+
+## ADR-014: Per-model dispatch configs for parse-rate
+
+**Decided:** the dispatcher sends a different request payload per model, picked from a 144-cell empirical run (`.research-parse-rate/`, 2026-05-21). Configs live in `scripts/dispatch/configs.ts` as `MODEL_CONFIGS`, guarded by `tests/unit/dispatch-configs.test.ts`. Shipped in PR #10 (`81a8c25`).
+
+| Model | Variant | Baseline parse-rate | Production parse-rate |
+|---|---|---|---|
+| `anthropic/claude-sonnet-4-6` | baseline (no `response_format`, no `extra_body`) | 100% | 100% |
+| `google/gemini-3.5-flash` | json-schema (cleaned prompt + strict + `provider.require_parameters`) | 75% | 100% |
+| `openai/gpt-5` | combined-best (cleaned + strict + `reasoning.effort: minimal`) | 37.5% | 100% |
+
+**Alternatives:** one shared payload shape; aggressive client-side repair of malformed JSON; a single "JSON mode" toggle.
+
+**Rationale:**
+
+- The baseline numbers are not opinion. Phase C of `.research-parse-rate/` ran 6 models by 6 variants by 8 fixture findings = 288 calls and measured parse success directly. Claude was at 100%, Gemini at 75%, GPT-5 at 37.5%. A shared shape costs roughly 60% of GPT-5 calls.
+- The fixes are model-specific. Gemini fails on markdown fences and unquoted property names; the json-schema variant with `provider.require_parameters: true` eliminates both. GPT-5 fails on long-form truncation and empty responses; `reasoning.effort: minimal` plus strict schema fixes both without latency loss. Claude already returns clean JSON and breaks under json-schema (OpenRouter's Anthropic backend rejects strict schema with `http 400 "Provider returned error"`).
+- Client-side JSON repair was prototyped in `.research-parse-rate/variants/`. It buys back ~5-10 percentage points and loses ground-truth match because the repair sometimes corrupts the payload. Strict input is cheaper than tolerant parsing.
+
+**Trade-off:**
+
+- The dispatcher carries a per-model config table. Adding a new model means adding a row, ideally backed by a fresh run. The cost is a small lookup; the alternative was a fragile shared payload.
+- Model deprecation (Claude 4.6 to 4.7, GPT-5 to 6) requires re-running the research. `run.ts` is the reproducer.
+- Codifying that Claude must not receive json-schema couples the harness to one OpenRouter backend quirk. If OpenRouter fixes the underlying Anthropic-backend bug, the Claude row can revert to json-schema and gain a small bump in score consistency. See the `Revisit if` clause.
+
+**Revisit if:** OpenRouter changes Anthropic-backend behavior; a target model is replaced by a new version; the finding schema in `docs/PHILOSOPHY.md` materially changes shape. Do not re-run for routine harness changes; the signal from the 144-cell run is durable.

@@ -107,3 +107,84 @@ Concrete failure modes encountered while building and using this harness. Each e
 **Do instead:** run from the main repo directory. Use Linux-native binary paths (`/usr/local/bin/...`, `./node_modules/.bin/...`) not the Windows wrappers. If you see "zero results" from a tool that should return data, check `pwd` first.
 
 This is a Yonatan-specific environmental hazard, but it has cost real work. Document it for future-anyone running this harness on WSL.
+
+## 14. Silent `.catch(() => {})` on journey interactions
+
+**Anti-pattern:** wrap every `page.fill`, `page.click`, or `page.waitForURL` with a bare catch-all so the journey never throws.
+
+```ts
+await page.getByLabel('your name').fill('test').catch(() => {});
+await page.getByRole('button', { name: 'join' }).click().catch(() => {});
+```
+
+**Why it fails:** the swallowed errors are real signal. A label rename, a selector removed by a refactor, a button hidden behind a feature flag all show up as "tentative pass" because the catch returned undefined and the test pressed on. The journey now lies about what it tested. Worst case the only symptom is a downstream step that stalls on a `waitFor` until the test-level timeout.
+
+**Do instead:** record the error as a finding so the report surfaces it.
+
+```ts
+await page.getByLabel('your name').fill('test').catch((err) => {
+  listeners.errors.push(err.message);
+  findings.push(makeFinding({
+    step_id: 'J2/02',
+    severity: 'MEDIUM',
+    bucket: 'cosmetic',
+    title: 'name input did not accept fill',
+    detail: err.message,
+  }));
+});
+```
+
+If the interaction is genuinely optional, wrap it in a named helper that records the skip explicitly. Never let a bare empty catch decide.
+
+## 15. `Promise.race([waitForURL, waitForTimeout])` is broken
+
+**Anti-pattern:** race a URL wait against a hard timeout to bail out early.
+
+```ts
+await Promise.race([
+  page.waitForURL(/\/game\//),
+  page.waitForTimeout(8_000),
+]);
+```
+
+**Why it fails:** `Promise.race` does not cancel the loser. If `waitForURL` resolves quickly the race resolves quickly, but the dangling `waitForTimeout` still ticks in the background. If `waitForURL` never matches, the race resolves at N with no signal whether the navigation happened. Chain three of these and each step's worst case compounds toward `test.setTimeout`, the only real cap. The race idiom looks like a deadline. It is not.
+
+**Do instead:** put the timeout on the operation that has one, and decide explicitly whether the navigation is mandatory or optional. If mandatory, let `waitForURL` throw and surface a finding. If optional, record the skip rather than swallow it.
+
+```ts
+// Mandatory navigation: let it throw, the test fails loudly.
+await page.waitForURL(/\/game\//, { timeout: 8_000 });
+
+// Optional navigation: record what happened, do not swallow it.
+const navigated = await page
+  .waitForURL(/\/game\//, { timeout: 8_000 })
+  .then(() => true)
+  .catch((err) => {
+    listeners.errors.push(`waitForURL timed out: ${err.message}`);
+    return false;
+  });
+```
+
+`Promise.race` is for genuinely concurrent operations where you want the winner's value, not for "give up after N seconds." A bare `.catch(() => {})` here would also fall into anti-pattern 14.
+
+## 16. Asserting visibility immediately after `domcontentloaded`
+
+**Anti-pattern:** navigate with `waitUntil: 'domcontentloaded'` and then call `.isVisible()` on an SPA element right away.
+
+```ts
+await page.goto(url, { waitUntil: 'domcontentloaded' });
+const link = page.locator('[data-card] a').first();
+if (await link.isVisible()) { /* ... */ }
+```
+
+**Why it fails:** SPAs hydrate client-side after DCL. The DOM node for the card grid is not yet attached, or it is attached with `display: none` until the client bundle renders it. `.isVisible()` returns false. The journey takes the false branch and reports a clean pass on a path it never actually walked.
+
+**Do instead:** wait for the element to be attached, or wait for network-idle when the post-hydration render is data-driven.
+
+```ts
+await link.waitFor({ state: 'attached', timeout: 8_000 });
+// or, when hydration is gated on a fetch:
+await page.waitForLoadState('networkidle');
+```
+
+Web-first assertions like `await expect(link).toBeVisible({ timeout: 8_000 })` poll for the same reason and are usually the cleanest fix.

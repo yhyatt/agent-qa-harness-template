@@ -270,3 +270,55 @@ Most tests port over in under an hour each.
    populate-auth attaches via CDP, finds the BrowserContext on your target URL, captures storageState, and exits. Chrome stays open.
 
 4. Verify the fixture is real: `wc -c tests/e2e/fixtures/host-auth.json` should be > 1KB.
+
+### WSL2 + CDP auth capture
+
+Persistent-mode bundled Chromium under WSLg has known input forwarding issues: the window paints but mouse clicks and sometimes keystrokes do not reach the browser. OAuth flows that require clicking through a Google or Microsoft consent screen are the common failure mode. CDP attach is the reliable path on WSL2 because Playwright only reads storageState from your native Windows Chrome; it does not drive any input.
+
+The catch is networking. Chrome on Windows binds to `127.0.0.1` by default, and WSL cannot reach Windows loopback over the default bridge. Chrome must bind to all interfaces:
+
+Run this from a Windows shell (cmd.exe or PowerShell), not from WSL. cmd.exe and PowerShell do not accept POSIX `\` line continuations, so the command is kept on a single line.
+
+```
+chrome.exe --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir=C:\Temp\qa-chrome-profile
+```
+
+Then find the WSL-to-Windows gateway IP from inside WSL:
+
+```bash
+ip route | grep default
+# default via 172.20.16.1 dev eth0 ...
+#            ^^^^^^^^^^^^ this address is your gateway
+```
+
+And run populate-auth pointing at that IP:
+
+```bash
+QA_AUTH_CDP=1 QA_AUTH_CDP_URL=http://172.20.16.1:9222 \
+  TEST_TARGET_URL=https://my-app.com npm run populate-auth
+```
+
+On Chrome 136 and later the `--user-data-dir` flag is mandatory even on the default profile; without it `--remote-debugging-port` is silently ignored.
+
+If `chromium.connectOverCDP` still fails, check the Windows firewall: opening port 9222 to the WSL subnet may need an inbound rule. Test connectivity from WSL first with `curl http://<gateway-ip>:9222/json/version`; a healthy Chrome answers with a JSON blob.
+
+## Splitting CI by auth-gated vs no-auth journeys
+
+The template ships two npm scripts that filter journeys by an `@auth` title tag:
+
+```json
+"test:e2e:no-auth": "playwright test --grep-invert @auth",
+"test:e2e:auth":    "playwright test --grep @auth --pass-with-no-tests"
+```
+
+Convention: any `test.describe(...)` for a journey that requires a populated auth fixture gets ` @auth` suffixed to its title.
+
+```ts
+test.describe('J1: primary-user happy path @auth', () => {
+  // ...
+});
+```
+
+The default PR CI gate should run `test:e2e:no-auth`, which needs no fixture and never blocks on session expiry. A separate nightly job runs `test:e2e:auth` against a fresh `host-auth.json`. Splitting this way means PR runs stay green when the fixture happens to be stale, and the nightly catches actual auth-gated regressions.
+
+`--pass-with-no-tests` keeps `test:e2e:auth` from failing before any consumer journey is tagged with `@auth`. Remove it once at least one journey carries the tag if you want a missing match to fail the run.

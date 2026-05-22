@@ -57,6 +57,11 @@ const FALLBACK_JOIN_CODE: string | null = null;
 const journeyResults: JourneyResult[] = [];
 const axeSurfaces: AxeSurface[] = [];
 
+// convention: tag auth-gated describes by suffixing the title with " @auth"
+//   test.describe('host flow @auth', ...) is caught by test:e2e:auth, skipped by test:e2e:no-auth.
+// the stub J1/J3 blocks below are auth-gated in spirit but tag is omitted on the stubs;
+// add @auth to the describe title once you replace the stub body with a real flow.
+
 // ---------------------------------------------------------------------------
 // J1 - primary-user happy path (auth-gated)
 // ---------------------------------------------------------------------------

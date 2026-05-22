@@ -25,11 +25,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
-// Find latest run directory (mirrors multi-model-dispatch.ts:
-// regex filter ensures only valid YYYY-MM-DD-HH-MM entries are considered)
+// Find latest run directory (mirrors multi-model-dispatch.ts).
+// The pattern is path-safety only: it accepts both timestamp run-ids
+// (e.g. 2026-05-22-14-30) and semantic run-ids (e.g. overnight-2026-05-22)
+// while rejecting characters that would break path handling. The lookahead
+// requires at least one alphanumeric, which rejects dot-segments ('.', '..',
+// '...') so they fall through to the explicit-path branch in resolveRunDir
+// instead of being joined into .qa-runs/.
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+const RUN_DIR_PATTERN = /^(?=.*[a-z0-9])[a-z0-9._-]+$/i;
+
+// .qa-runs/ also houses utility directories that match the path-safety
+// regex but are not runs. Exclude them from the latest-run scan so that
+// when latest.txt is missing or stale, the fallback does not pick one.
+const RUN_DIR_DENYLIST = new Set(['playwright-output', 'userDataDir']);
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -39,7 +49,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    if (RUN_DIR_PATTERN.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate) && !RUN_DIR_DENYLIST.has(candidate)) {
       const resolved = path.join(base, candidate);
       await fs.stat(resolved);
       return resolved;
@@ -57,17 +67,35 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  const valid = rawEntries
-    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+  // Filter to candidate dirs that match the path-safety regex and are not on
+  // the denylist, then keep only those containing a findings.json marker.
+  // findings.json is written once by the journey runtime at run end and is
+  // never rewritten by dispatch/dedup/report, so its mtime is the true
+  // run-finish time and is not perturbed by later post-processing of an
+  // older run. Requiring the marker also rejects arbitrary user-created
+  // directories under .qa-runs/ that the static denylist would otherwise miss.
+  const candidates = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
-  if (valid.length === 0) {
+  const runs = (
+    await Promise.all(
+      candidates.map(async (name) => {
+        try {
+          const stat = await fs.stat(path.join(base, name, 'findings.json'));
+          return { name, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter((r): r is { name: string; mtimeMs: number } => r !== null);
+  if (runs.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
+      `.qa-runs/ has no completed run directories (a run dir must contain a findings.json marker).`,
     );
   }
-  // Sort lexicographically; the timestamp format sorts correctly
-  const sorted = valid.sort();
-  return path.join(base, sorted[sorted.length - 1]!);
+  runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, runs[0]!.name);
 }
 
 // ---------------------------------------------------------------------------

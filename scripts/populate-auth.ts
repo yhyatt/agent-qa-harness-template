@@ -55,6 +55,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+/**
+ * Best-effort WSL detection. Reads /proc/version synchronously; any read or
+ * platform mismatch returns false. No new dependencies.
+ */
+function isWsl(): boolean {
+  try {
+    if (process.platform !== 'linux') return false;
+    const v = fs.readFileSync('/proc/version', 'utf-8');
+    return /microsoft/i.test(v);
+  } catch {
+    return false;
+  }
+}
+
 const TARGET = process.env.TEST_TARGET_URL ?? 'http://localhost:3000';
 const ENTRY = process.env.QA_AUTH_ENTRY_PATH ?? '/';
 const ROLE = process.env.ROLE ?? 'primary user';
@@ -115,10 +129,23 @@ async function runCdpMode(): Promise<void> {
     browser = await chromium.connectOverCDP(CDP_URL);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    console.error(`cannot connect to Chrome at ${CDP_URL}: ${reason}`);
-    console.error(
-      'Start Chrome with: google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile',
-    );
+    console.error(`Cannot connect to Chrome at ${CDP_URL}: ${reason}`);
+    console.error('');
+    if (isWsl()) {
+      console.error('On WSL2, Chrome must bind to all interfaces so WSL can reach it.');
+      console.error('Run from a Windows shell (cmd.exe or PowerShell), not WSL:');
+      console.error('  chrome.exe --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir=C:\\Temp\\qa-chrome-profile');
+      console.error('Find your WSL gateway IP with: ip route | grep default');
+      console.error('Then re-run with: QA_AUTH_CDP=1 QA_AUTH_CDP_URL=http://<gateway-ip>:9222 npm run populate-auth');
+    } else if (process.platform === 'win32') {
+      console.error('On Windows, start Chrome from cmd.exe or PowerShell:');
+      console.error('  chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\Temp\\qa-chrome-profile');
+      console.error('Ensure no other Chrome instance owns the same profile directory.');
+    } else {
+      console.error('On macOS or native Linux, ensure no other Chrome instance owns the default profile:');
+      console.error('  google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/qa-chrome-profile');
+    }
+    console.error('');
     console.error(
       'On Chrome 136+, --remote-debugging-port is ignored on the default profile; the --user-data-dir flag is required.',
     );
@@ -187,6 +214,12 @@ async function runInteractiveMode(): Promise<void> {
   let close: () => Promise<void>;
 
   if (PERSIST) {
+    if (isWsl()) {
+      process.stderr.write(
+        'warning: persistent-mode Chromium under WSLg has known input forwarding issues.\n' +
+          'if clicks or keystrokes do not reach the browser, exit with Ctrl-C and re-run with QA_AUTH_CDP=1.\n\n',
+      );
+    }
     fs.mkdirSync(PROFILE_DIR, { recursive: true });
     ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
       headless: false,

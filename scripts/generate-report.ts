@@ -19,10 +19,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
-// Find latest run directory (copied from dedup-findings.ts; not exported there)
+// Find latest run directory (copied from dedup-findings.ts; not exported there).
+// The pattern is path-safety only: it accepts both timestamp run-ids
+// (e.g. 2026-05-22-14-30) and semantic run-ids (e.g. overnight-2026-05-22).
+// The lookahead requires at least one alphanumeric, which rejects dot-segments
+// ('.', '..', '...') so they fall through to the explicit-path branch in
+// resolveRunDir instead of being joined into .qa-runs/.
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+const RUN_DIR_PATTERN = /^(?=.*[a-z0-9])[a-z0-9._-]+$/i;
+
+// .qa-runs/ also houses utility directories that match the path-safety
+// regex but are not runs. Exclude them from the latest-run scan so that
+// when latest.txt is missing or stale, the fallback does not pick one.
+const RUN_DIR_DENYLIST = new Set(['playwright-output', 'userDataDir']);
 
 async function findLatestRunDir(): Promise<string> {
   const base = path.resolve(REPO_ROOT, '.qa-runs');
@@ -32,7 +42,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    if (RUN_DIR_PATTERN.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate) && !RUN_DIR_DENYLIST.has(candidate)) {
       const resolved = path.join(base, candidate);
       await fs.stat(resolved);
       return resolved;
@@ -50,16 +60,30 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  const valid = rawEntries
-    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+  // Filter to candidate dirs that contain a findings.json marker, sort by
+  // that file's mtime. See dedup-findings.ts findLatestRunDir for rationale.
+  const candidates = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
-  if (valid.length === 0) {
+  const runs = (
+    await Promise.all(
+      candidates.map(async (name) => {
+        try {
+          const stat = await fs.stat(path.join(base, name, 'findings.json'));
+          return { name, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter((r): r is { name: string; mtimeMs: number } => r !== null);
+  if (runs.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
+      `.qa-runs/ has no completed run directories (a run dir must contain a findings.json marker).`,
     );
   }
-  const sorted = valid.sort();
-  return path.join(base, sorted[sorted.length - 1]!);
+  runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, runs[0]!.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -71,25 +95,31 @@ async function findLatestRunDir(): Promise<string> {
  *
  * Accepted forms (applied in order):
  *  1. Undefined or empty -> use findLatestRunDir().
- *  2. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
- *  3. Contains '/' or '\', starts with '.' or '/': treated as a path;
+ *  2. Path-safe run-id matching RUN_DIR_PATTERN (timestamps like
+ *     2026-05-22-14-30 and semantic names like overnight-2026-05-22):
+ *     resolved under .qa-runs/.
+ *  3. Contains '/' or '\\', starts with '.' or '/': treated as a path;
  *     relative paths resolved against REPO_ROOT.
- *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
+ *  4. Anything else (unsafe characters): treated as a run-id under
+ *     .qa-runs/ with a stderr note.
  */
 async function resolveRunDir(raw: string | undefined): Promise<string> {
   if (!raw) {
     return findLatestRunDir();
   }
-  if (RUN_DIR_PATTERN.test(raw)) {
-    return path.join(REPO_ROOT, '.qa-runs', raw);
-  }
+  // Test the path form first so values like '.audit-2026-05-22' or any other
+  // dot-prefixed local path are treated as explicit paths even though the
+  // path-safety regex would also accept them.
   if (raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || raw.startsWith('/')) {
     return path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw);
   }
-  // Bare name: treat as run-id but warn
+  if (RUN_DIR_PATTERN.test(raw)) {
+    return path.join(REPO_ROOT, '.qa-runs', raw);
+  }
+  // Unsafe characters: treat as run-id but warn.
   process.stderr.write(
     `[report] note: interpreting QA_RUN_DIR='${raw}' as a run id under .qa-runs/. ` +
-      `Pass a full path or YYYY-MM-DD-HH-MM run-id to suppress this note.\n`,
+      `Pass a full path or a run-id matching [a-z0-9._-]+ to suppress this note.\n`,
   );
   return path.join(REPO_ROOT, '.qa-runs', raw);
 }

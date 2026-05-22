@@ -8,6 +8,8 @@
     "test:e2e": "playwright test",
     "test:e2e:desktop": "playwright test --project chromium-desktop",
     "test:e2e:mobile": "playwright test --project mobile-iphone-13",
+    "test:e2e:no-auth": "playwright test --grep-invert @auth",
+    "test:e2e:auth": "playwright test --grep @auth --pass-with-no-tests",
     "populate-auth": "tsx scripts/populate-auth.ts",
     "dispatch": "tsx scripts/multi-model-dispatch.ts",
     "dedup": "tsx scripts/dedup-findings.ts",

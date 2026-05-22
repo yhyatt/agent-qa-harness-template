@@ -72,33 +72,49 @@ function semaphore(n: number): <T>(task: () => Promise<T>) => Promise<T> {
 // Find latest run directory / resolve QA_RUN_DIR
 // ---------------------------------------------------------------------------
 
-const RUN_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$/;
+// Path-safety pattern: accepts timestamp run-ids (e.g. 2026-05-22-14-30) and
+// semantic run-ids (e.g. overnight-2026-05-22). Rejects characters that would
+// break path handling. The lookahead requires at least one alphanumeric, which
+// rejects dot-segments ('.', '..', '...') so they fall through to the
+// explicit-path branch in resolveRunDir instead of being joined into .qa-runs/.
+const RUN_DIR_PATTERN = /^(?=.*[a-z0-9])[a-z0-9._-]+$/i;
+
+// .qa-runs/ also houses utility directories that match the path-safety
+// regex but are not runs (playwright-output/ from the JSON reporter and
+// userDataDir/ from populate-auth). Exclude them from the latest-run scan
+// so that when latest.txt is missing or stale, the fallback does not pick
+// one (lexicographic sort would otherwise prefer playwright-output over
+// timestamped run-ids).
+const RUN_DIR_DENYLIST = new Set(['playwright-output', 'userDataDir']);
 
 /**
  * Resolves the run directory from the QA_RUN_DIR env value.
  *
  * Three forms are accepted:
- *  1. Timestamp run-id (YYYY-MM-DD-HH-MM): resolved under .qa-runs/.
+ *  1. Path-safe run-id (matches `[a-z0-9._-]+`, e.g. `2026-05-22-14-30` or
+ *     `overnight-2026-05-22`): resolved under .qa-runs/.
  *  2. Path (contains / or \, or starts with . or /): resolved relative to REPO_ROOT
  *     if not already absolute.
  *  3. Bare name (anything else): treated as a run-id under .qa-runs/ with a stderr note.
  */
 function resolveRunDir(envValue: string): string {
-  const TIMESTAMP_RE = RUN_DIR_PATTERN;
+  const RUN_DIR_RE = RUN_DIR_PATTERN;
   const isPath =
     envValue.includes('/') ||
     envValue.includes('\\') ||
     envValue.startsWith('.') ||
     envValue.startsWith('/');
 
-  if (TIMESTAMP_RE.test(envValue)) {
-    // Form 1: canonical run-id
-    return path.join(REPO_ROOT, '.qa-runs', envValue);
+  if (isPath) {
+    // Form 2 (tested first): explicit path. Values like '.audit-2026-05-22'
+    // also pass the path-safety regex, so checking path-ness first keeps them
+    // treated as paths rather than joined into .qa-runs/.
+    return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
   }
 
-  if (isPath) {
-    // Form 2: explicit path
-    return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
+  if (RUN_DIR_RE.test(envValue)) {
+    // Form 1: path-safe run-id
+    return path.join(REPO_ROOT, '.qa-runs', envValue);
   }
 
   // Form 3: bare name, treat as run-id and note it
@@ -117,7 +133,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    if (RUN_DIR_PATTERN.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate) && !RUN_DIR_DENYLIST.has(candidate)) {
       const resolved = path.join(base, candidate);
       // Verify the directory actually exists before trusting the pointer.
       await fs.stat(resolved);
@@ -136,20 +152,35 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  // Filter to valid timestamp dirs only; .qa-runs/ also contains latest.txt and
-  // playwright-output/, both of which sort after digit-based timestamps.
-  // Use withFileTypes to also exclude non-directory entries like latest.txt.
-  const valid = rawEntries
-    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name))
+  // Filter to candidate dirs that contain a findings.json marker, then sort
+  // by that file's mtime. The marker is the same file the journey runtime
+  // writes once at end-of-run; its mtime is the true run-finish time and is
+  // not perturbed by later dedup/report writes to the same directory.
+  // Requiring the marker also rejects arbitrary user-created directories
+  // under .qa-runs/ (a configured QA_AUTH_PROFILE_DIR, for example) that the
+  // static denylist would otherwise miss.
+  const candidates = rawEntries
+    .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
-  if (valid.length === 0) {
+  const runs = (
+    await Promise.all(
+      candidates.map(async (name) => {
+        try {
+          const stat = await fs.stat(path.join(base, name, 'findings.json'));
+          return { name, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter((r): r is { name: string; mtimeMs: number } => r !== null);
+  if (runs.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (expected YYYY-MM-DD-HH-MM format).`,
+      `.qa-runs/ has no completed run directories (a run dir must contain a findings.json marker).`,
     );
   }
-  // Sort lexicographically; the timestamp format (YYYY-MM-DD-HH-MM) sorts correctly
-  const sorted = valid.sort();
-  return path.join(base, sorted[sorted.length - 1]!);
+  runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, runs[0]!.name);
 }
 
 // ---------------------------------------------------------------------------

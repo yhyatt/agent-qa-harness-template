@@ -67,3 +67,16 @@ This opens a headed browser. Sign in as the primary user. When you reach the aut
 The fixture contains a live session cookie. It is gitignored. Never commit it.
 
 Sessions expire (provider-specific; Clerk JWT cookies live ~7 days, Supabase ~30 days). When the fixture expires, the auth-gated journeys will report `auth-blocked` again. Re-run `npm run populate-auth`.
+
+## auth tagging
+
+Tag every auth-gated `test.describe` by suffixing its title with ` @auth`. Playwright's grep filters operate on the title, so this lets CI split runs cleanly:
+
+```ts
+test.describe('J1: primary-user happy path @auth', () => {
+  // ...
+});
+```
+
+`npm run test:e2e:no-auth` runs every journey except `@auth`-tagged ones (the default for PR CI, no fixture required). `npm run test:e2e:auth` runs only the `@auth`-tagged ones (the nightly job that depends on `host-auth.json`). No-auth describes stay untagged.
+
