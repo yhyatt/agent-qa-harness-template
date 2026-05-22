@@ -49,7 +49,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    if (RUN_DIR_PATTERN.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate) && !RUN_DIR_DENYLIST.has(candidate)) {
       const resolved = path.join(base, candidate);
       await fs.stat(resolved);
       return resolved;
@@ -75,11 +75,18 @@ async function findLatestRunDir(): Promise<string> {
       `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
     );
   }
-  // Sort lexicographically. Timestamp run-ids (YYYY-MM-DD-HH-MM) sort by recency;
-  // semantic names sort by name and interleave with the timestamps. Use the
-  // .qa-runs/latest.txt pointer above for an authoritative "most recent" signal.
-  const sorted = valid.sort();
-  return path.join(base, sorted[sorted.length - 1]!);
+  // Sort by mtime so semantic run-ids (overnight-*, etc.) interleave correctly
+  // with timestamp run-ids. Lex sort would put 'overnight-*' after digit-prefixed
+  // names regardless of when each run finished. latest.txt above is still the
+  // authoritative pointer; this is the cold-path fallback.
+  const withStats = await Promise.all(
+    valid.map(async (name) => {
+      const stat = await fs.stat(path.join(base, name));
+      return { name, mtimeMs: stat.mtimeMs };
+    }),
+  );
+  withStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, withStats[0]!.name);
 }
 
 // ---------------------------------------------------------------------------

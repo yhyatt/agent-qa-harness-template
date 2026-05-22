@@ -42,7 +42,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    if (RUN_DIR_PATTERN.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate) && !RUN_DIR_DENYLIST.has(candidate)) {
       const resolved = path.join(base, candidate);
       await fs.stat(resolved);
       return resolved;
@@ -68,8 +68,15 @@ async function findLatestRunDir(): Promise<string> {
       `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
     );
   }
-  const sorted = valid.sort();
-  return path.join(base, sorted[sorted.length - 1]!);
+  // Sort by mtime; see dedup-findings.ts findLatestRunDir for rationale.
+  const withStats = await Promise.all(
+    valid.map(async (name) => {
+      const stat = await fs.stat(path.join(base, name));
+      return { name, mtimeMs: stat.mtimeMs };
+    }),
+  );
+  withStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, withStats[0]!.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -93,11 +100,14 @@ async function resolveRunDir(raw: string | undefined): Promise<string> {
   if (!raw) {
     return findLatestRunDir();
   }
-  if (RUN_DIR_PATTERN.test(raw)) {
-    return path.join(REPO_ROOT, '.qa-runs', raw);
-  }
+  // Test the path form first so values like '.audit-2026-05-22' or any other
+  // dot-prefixed local path are treated as explicit paths even though the
+  // path-safety regex would also accept them.
   if (raw.includes('/') || raw.includes('\\') || raw.startsWith('.') || raw.startsWith('/')) {
     return path.isAbsolute(raw) ? raw : path.resolve(REPO_ROOT, raw);
+  }
+  if (RUN_DIR_PATTERN.test(raw)) {
+    return path.join(REPO_ROOT, '.qa-runs', raw);
   }
   // Unsafe characters: treat as run-id but warn.
   process.stderr.write(

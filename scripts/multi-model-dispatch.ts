@@ -105,14 +105,16 @@ function resolveRunDir(envValue: string): string {
     envValue.startsWith('.') ||
     envValue.startsWith('/');
 
+  if (isPath) {
+    // Form 2 (tested first): explicit path. Values like '.audit-2026-05-22'
+    // also pass the path-safety regex, so checking path-ness first keeps them
+    // treated as paths rather than joined into .qa-runs/.
+    return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
+  }
+
   if (RUN_DIR_RE.test(envValue)) {
     // Form 1: path-safe run-id
     return path.join(REPO_ROOT, '.qa-runs', envValue);
-  }
-
-  if (isPath) {
-    // Form 2: explicit path
-    return path.isAbsolute(envValue) ? envValue : path.resolve(REPO_ROOT, envValue);
   }
 
   // Form 3: bare name, treat as run-id and note it
@@ -131,7 +133,7 @@ async function findLatestRunDir(): Promise<string> {
   const latestFile = path.join(base, 'latest.txt');
   try {
     const candidate = (await fs.readFile(latestFile, 'utf-8')).trim();
-    if (RUN_DIR_PATTERN.test(candidate)) {
+    if (RUN_DIR_PATTERN.test(candidate) && !RUN_DIR_DENYLIST.has(candidate)) {
       const resolved = path.join(base, candidate);
       // Verify the directory actually exists before trusting the pointer.
       await fs.stat(resolved);
@@ -161,10 +163,15 @@ async function findLatestRunDir(): Promise<string> {
       `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
     );
   }
-  // Sort lexicographically; timestamp run-ids (YYYY-MM-DD-HH-MM) sort correctly,
-  // and semantic names fall in alongside them.
-  const sorted = valid.sort();
-  return path.join(base, sorted[sorted.length - 1]!);
+  // Sort by mtime; see dedup-findings.ts findLatestRunDir for rationale.
+  const withStats = await Promise.all(
+    valid.map(async (name) => {
+      const stat = await fs.stat(path.join(base, name));
+      return { name, mtimeMs: stat.mtimeMs };
+    }),
+  );
+  withStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, withStats[0]!.name);
 }
 
 // ---------------------------------------------------------------------------
