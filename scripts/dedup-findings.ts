@@ -67,26 +67,35 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  const valid = rawEntries
+  // Filter to candidate dirs that match the path-safety regex and are not on
+  // the denylist, then keep only those containing a findings.json marker.
+  // findings.json is written once by the journey runtime at run end and is
+  // never rewritten by dispatch/dedup/report, so its mtime is the true
+  // run-finish time and is not perturbed by later post-processing of an
+  // older run. Requiring the marker also rejects arbitrary user-created
+  // directories under .qa-runs/ that the static denylist would otherwise miss.
+  const candidates = rawEntries
     .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
-  if (valid.length === 0) {
+  const runs = (
+    await Promise.all(
+      candidates.map(async (name) => {
+        try {
+          const stat = await fs.stat(path.join(base, name, 'findings.json'));
+          return { name, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter((r): r is { name: string; mtimeMs: number } => r !== null);
+  if (runs.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
+      `.qa-runs/ has no completed run directories (a run dir must contain a findings.json marker).`,
     );
   }
-  // Sort by mtime so semantic run-ids (overnight-*, etc.) interleave correctly
-  // with timestamp run-ids. Lex sort would put 'overnight-*' after digit-prefixed
-  // names regardless of when each run finished. latest.txt above is still the
-  // authoritative pointer; this is the cold-path fallback.
-  const withStats = await Promise.all(
-    valid.map(async (name) => {
-      const stat = await fs.stat(path.join(base, name));
-      return { name, mtimeMs: stat.mtimeMs };
-    }),
-  );
-  withStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return path.join(base, withStats[0]!.name);
+  runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, runs[0]!.name);
 }
 
 // ---------------------------------------------------------------------------

@@ -152,26 +152,35 @@ async function findLatestRunDir(): Promise<string> {
         'Run the Playwright harness first, or set QA_RUN_DIR.',
     );
   }
-  // Filter to valid run dirs only. .qa-runs/ also contains latest.txt
-  // (excluded by isDirectory) and the utility dirs in RUN_DIR_DENYLIST
-  // (playwright-output/, userDataDir/).
-  const valid = rawEntries
+  // Filter to candidate dirs that contain a findings.json marker, then sort
+  // by that file's mtime. The marker is the same file the journey runtime
+  // writes once at end-of-run; its mtime is the true run-finish time and is
+  // not perturbed by later dedup/report writes to the same directory.
+  // Requiring the marker also rejects arbitrary user-created directories
+  // under .qa-runs/ (a configured QA_AUTH_PROFILE_DIR, for example) that the
+  // static denylist would otherwise miss.
+  const candidates = rawEntries
     .filter((e) => e.isDirectory() && RUN_DIR_PATTERN.test(e.name) && !RUN_DIR_DENYLIST.has(e.name))
     .map((e) => e.name);
-  if (valid.length === 0) {
+  const runs = (
+    await Promise.all(
+      candidates.map(async (name) => {
+        try {
+          const stat = await fs.stat(path.join(base, name, 'findings.json'));
+          return { name, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      }),
+    )
+  ).filter((r): r is { name: string; mtimeMs: number } => r !== null);
+  if (runs.length === 0) {
     throw new Error(
-      `.qa-runs/ has no valid run directories (names must match [a-z0-9._-]+).`,
+      `.qa-runs/ has no completed run directories (a run dir must contain a findings.json marker).`,
     );
   }
-  // Sort by mtime; see dedup-findings.ts findLatestRunDir for rationale.
-  const withStats = await Promise.all(
-    valid.map(async (name) => {
-      const stat = await fs.stat(path.join(base, name));
-      return { name, mtimeMs: stat.mtimeMs };
-    }),
-  );
-  withStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return path.join(base, withStats[0]!.name);
+  runs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return path.join(base, runs[0]!.name);
 }
 
 // ---------------------------------------------------------------------------

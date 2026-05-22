@@ -136,7 +136,7 @@ async function runCdpMode(): Promise<void> {
       console.error('Run from a Windows shell (cmd.exe or PowerShell), not WSL:');
       console.error('  chrome.exe --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir=C:\\Temp\\qa-chrome-profile');
       console.error('Find your WSL gateway IP with: ip route | grep default');
-      console.error('Then re-run with: QA_AUTH_CDP_URL=http://<gateway-ip>:9222 npm run populate-auth');
+      console.error('Then re-run with: QA_AUTH_CDP=1 QA_AUTH_CDP_URL=http://<gateway-ip>:9222 npm run populate-auth');
     } else if (process.platform === 'win32') {
       console.error('On Windows, start Chrome from cmd.exe or PowerShell:');
       console.error('  chrome.exe --remote-debugging-port=9222 --user-data-dir=C:\\Temp\\qa-chrome-profile');

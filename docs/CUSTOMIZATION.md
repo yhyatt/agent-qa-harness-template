@@ -308,7 +308,7 @@ The template ships two npm scripts that filter journeys by an `@auth` title tag:
 
 ```json
 "test:e2e:no-auth": "playwright test --grep-invert @auth",
-"test:e2e:auth":    "playwright test --grep @auth"
+"test:e2e:auth":    "playwright test --grep @auth --pass-with-no-tests"
 ```
 
 Convention: any `test.describe(...)` for a journey that requires a populated auth fixture gets ` @auth` suffixed to its title.
@@ -320,3 +320,5 @@ test.describe('J1: primary-user happy path @auth', () => {
 ```
 
 The default PR CI gate should run `test:e2e:no-auth`, which needs no fixture and never blocks on session expiry. A separate nightly job runs `test:e2e:auth` against a fresh `host-auth.json`. Splitting this way means PR runs stay green when the fixture happens to be stale, and the nightly catches actual auth-gated regressions.
+
+`--pass-with-no-tests` keeps `test:e2e:auth` from failing before any consumer journey is tagged with `@auth`. Remove it once at least one journey carries the tag if you want a missing match to fail the run.

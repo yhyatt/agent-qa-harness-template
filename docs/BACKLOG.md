@@ -29,6 +29,24 @@ Deferred nits from Opus review (2026-05-19):
 - **Shadow Supabase project**. Ballpark BACKLOG line 123 already tracks this. Yonatan provisions a separate free-tier `ballpark-qa` Supabase project before the Vercel-preview leg of the wet run.
 - **OAuth auth capture**: resolved in fix/oauth-cdp-and-shared-run-id. QA_AUTH_PERSIST and QA_AUTH_CDP modes shipped.
 
+## Slice 6: Target-deployment identity in reports
+
+Surfaced by the 2026-05-22 Ballpark wet run: the report's `Build:` row is the consuming repo's `git rev-parse --short HEAD` (set at `tests/e2e/journeys/helpers.ts:282` and rendered at `scripts/generate-report.ts:524`), not the target app's deployed build. A downstream validator chased the SHA prefix into the consuming repo's git history and matched a superficially similar commit, producing a confidently wrong chronology claim while the QA findings themselves were valid.
+
+- **B-HARNESS-7: rename `Build:` to `Harness SHA:`** in the report header and in the `meta.build` field name. Pure relabel. Prevents future readers from confusing it with the target app's identity. 5-minute fix in `generate-report.ts` plus the matching field in `helpers.ts` write site.
+- **B-HARNESS-8: capture target-deployment headers at journey runtime**. The first `page.goto` in each journey records `response.headers()['x-vercel-id']`, `['x-vercel-deployment-url']`, and the response timestamp; these flow into `findings.json` as `meta.target_deployment = { vercel_id, deployment_url, captured_at }`. The report renders a separate `Target deployment:` row. Runtime capture is correct because a fresh request at report-gen time can race a redeploy.
+- **B-HARNESS-9: optional `/__build` convention**. Document that if the target app exposes `GET /__build` returning `{ commit, deployedAt }` (reading `VERCEL_GIT_COMMIT_SHA` on Vercel), the harness will fetch it at run start and surface the result. Ship a Next.js example handler in `examples/nextjs-supabase/` (and stub adapters for the other frameworks). Wider scope than 7 or 8 because it requires consumer cooperation.
+
+After all three land, a report header reads:
+
+```
+Target: https://app.example.com
+Target deployment: <short SHA> (Vercel dpl_..., deployed <ISO timestamp>)
+Harness SHA: <short SHA>
+```
+
+Three distinct identities, no naming ambiguity.
+
 ## v1.1 and beyond
 
 - **Auto-issue creation threshold**. ADR-005 defers this. Open question: what threshold (HIGH-only, unanimous-only, two-models-agree) makes sense once signal-to-noise is measured. Cannot decide without real run data.
