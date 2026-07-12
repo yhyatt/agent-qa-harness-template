@@ -173,6 +173,18 @@ function dedupKey(
   return createHash('sha1').update(tuple).digest('hex').slice(0, 12);
 }
 
+/**
+ * Compound (project, step_id) key for cross-severity collision tracking. A
+ * combined multi-project run holds two findings that share a step_id (one per
+ * Playwright project), so keying the collision map on step_id alone would
+ * mislabel them as a cross-severity collision. Scoping to (project, step_id)
+ * compares within a single project+step. Findings written before the project
+ * field existed map to a single project-agnostic bucket via `?? ''`.
+ */
+function stepKey(project: string, step_id: string): string {
+  return `${project}|${step_id}`;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -261,7 +273,9 @@ async function main(): Promise<void> {
     perModelTotalJudgments[m] = 0;
   }
 
-  // Cross-severity map: step_id -> Set of dedup_keys
+  // Cross-severity map: (project, step_id) -> Set of dedup_keys. Keyed on the
+  // project-qualified step so two same-step findings from different projects
+  // are not mistaken for a cross-severity collision.
   const stepKeyMap = new Map<string, Set<string>>();
 
   for (const finding of findings) {
@@ -306,11 +320,12 @@ async function main(): Promise<void> {
       finding.title,
     );
 
-    // Track cross-severity collisions for this step
-    if (!stepKeyMap.has(finding.step_id)) {
-      stepKeyMap.set(finding.step_id, new Set());
+    // Track cross-severity collisions for this project+step
+    const sKey = stepKey(finding.project ?? '', finding.step_id);
+    if (!stepKeyMap.has(sKey)) {
+      stepKeyMap.set(sKey, new Set());
     }
-    stepKeyMap.get(finding.step_id)!.add(key);
+    stepKeyMap.get(sKey)!.add(key);
 
     // Build the base DedupedFinding (spread, do not mutate input)
     const dedupedBase: Omit<DedupedFinding, 'cross_severity_warning'> = {
@@ -343,17 +358,22 @@ async function main(): Promise<void> {
   }
 
   // 5. Cross-severity collision detection
-  // For v1 inputs, each step_id has exactly one StepFinding so the set will
-  // always have one key. Multiple keys can only arise if the same step appeared
-  // with different severity values in different findings (not possible with the
-  // current dispatcher output format). Implemented anyway for correctness; the
-  // cross_severity_warning field is populated below if the set size is > 1.
+  // Within a single (project, step_id), each step normally has exactly one
+  // StepFinding so the set holds one key. A multi-project run legitimately has
+  // multiple findings per step_id (one per Playwright project), but the map is
+  // keyed on (project, step_id), so each project's step still resolves to its
+  // own set and cross-project findings are not mistaken for a collision.
+  // Multiple keys under one (project, step_id) can only arise if the same
+  // project+step appeared with different severity values in different findings
+  // (not possible with the current dispatcher output format). Implemented
+  // anyway for correctness; cross_severity_warning is populated below if the
+  // set size is > 1.
   //
   // Note: we key on the *input* finding's severity, not the model judgment's
   // severity. Model-adjusted severity divergence is not tracked here in v1.
   function attachCrossSeverityWarnings(arr: DedupedFinding[]): DedupedFinding[] {
     return arr.map((f) => {
-      const siblings = stepKeyMap.get(f.step_id);
+      const siblings = stepKeyMap.get(stepKey(f.project ?? '', f.step_id));
       if (!siblings || siblings.size <= 1) return f;
       const others = [...siblings].filter((k) => k !== f.dedup_key).sort();
       return { ...f, cross_severity_warning: others };

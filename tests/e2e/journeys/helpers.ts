@@ -494,8 +494,15 @@ export async function writeProjectSidecar(
     target_deployment_headers: getTargetDeployment(),
   };
 
+  // Write atomically: write to a temp file, then rename into place. A rename
+  // on the same filesystem is atomic, so aggregateRunReport (running in a
+  // separate globalTeardown process) never observes a half-written sidecar,
+  // even if this worker is killed mid-write. The tmp name is per
+  // (project, workerIndex) so concurrent workers never share a temp path.
   const file = path.join(PARTIALS_DIR, `${sanitizeSegment(project)}__${workerIndex}.json`);
-  fs.writeFileSync(file, JSON.stringify(sidecar, null, 2));
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(sidecar, null, 2));
+  fs.renameSync(tmp, file);
 }
 
 /**
@@ -512,19 +519,47 @@ export async function writeProjectSidecar(
 export async function aggregateRunReport(targetUrl: string): Promise<void> {
   let partialFiles: string[];
   try {
-    partialFiles = fs.readdirSync(PARTIALS_DIR).filter((f) => f.endsWith('.json'));
-  } catch {
-    partialFiles = [];
+    // Sorted so the merged results/findings order and the target_deployment
+    // tie-break below are stable run-over-run (PHILOSOPHY wants clean diffs).
+    partialFiles = fs
+      .readdirSync(PARTIALS_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .sort();
+  } catch (err) {
+    // A missing partials dir means genuinely zero sidecars (no journeys ran):
+    // return quietly, leaving no findings.json marker so the dispatcher skips
+    // the run. Any other error (permissions, transient FS failure) is a real
+    // problem and must be loud, not silently rendered as a clean empty run.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw err;
   }
 
   if (partialFiles.length === 0) {
     return;
   }
 
-  const sidecars: ProjectSidecar[] = partialFiles.map((file) => {
-    const text = fs.readFileSync(path.join(PARTIALS_DIR, file), 'utf-8');
-    return JSON.parse(text) as ProjectSidecar;
-  });
+  // Parse each sidecar independently: a single corrupt or truncated sidecar
+  // must not sink the whole run. Skip-and-warn on failure so the healthy
+  // projects still aggregate, matching ADR-016's degradation contract (a bad
+  // sidecar drops that one project, the rest survive).
+  const sidecars: ProjectSidecar[] = [];
+  for (const file of partialFiles) {
+    try {
+      const text = fs.readFileSync(path.join(PARTIALS_DIR, file), 'utf-8');
+      sidecars.push(JSON.parse(text) as ProjectSidecar);
+    } catch (err) {
+      process.stderr.write(
+        `note: skipping unreadable sidecar ${file} (${err instanceof Error ? err.message : String(err)}); its project is dropped from this run's report\n`,
+      );
+    }
+  }
+
+  // Every sidecar failed to parse. Treat as zero sidecars: write no marker.
+  if (sidecars.length === 0) {
+    return;
+  }
 
   const results: JourneyResult[] = sidecars.flatMap((s) => s.results);
   const axeSurfaces: AxeSurface[] = sidecars.flatMap((s) => s.axe_surfaces);

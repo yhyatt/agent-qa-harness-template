@@ -22,7 +22,7 @@ Every critical-path step becomes a journey. Conservatively, 3-5 journeys cover t
 
 Layer 2 captures "what happens when the app changes mode." These are the bug magnets: phase changes, modal opens, navigation, role switches.
 
-For each layer-1 journey, ask: at what points does the app's visible state change? Each transition is a candidate sub-journey. You do not need a separate `test()` block for each one; many are sub-steps inside a layer-1 journey. But state transitions are where you put `screenshot(page, journey, step)` calls and where you check console errors.
+For each layer-1 journey, ask: at what points does the app's visible state change? Each transition is a candidate sub-journey. You do not need a separate `test()` block for each one; many are sub-steps inside a layer-1 journey. But state transitions are where you put `screenshot(page, project, journey, step)` calls (pass `testInfo.project.name` for `project`) and where you check console errors.
 
 **Examples:**
 
@@ -72,7 +72,7 @@ When a journey is deprecated, mark it as such in the README and keep the ID reti
 Inside a journey, steps get sub-IDs: `J1/01`, `J1/02`, etc. Each step ID corresponds to one state transition (per layer 2 above). Six to twelve steps per journey is the working range.
 
 The step ID shows up in:
-- The screenshot path (`.qa-runs/.../screenshots/J1/04.png`)
+- The screenshot path (`.qa-runs/.../screenshots/<project>/J1/04.png`)
 - The structured JSON finding (`step_id: "J1/04"`)
 - The dedup key
 - The markdown report headers
