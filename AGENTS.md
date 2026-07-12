@@ -25,7 +25,7 @@ Adding a new framework or auth provider means a `docs/CUSTOMIZATION.md` section 
 2. **Structured first, prose second.** Every per-step finding emits JSON conforming to the schema in `docs/PHILOSOPHY.md`. Markdown reports are a rendering of that JSON, not a source of truth.
 3. **Cheap signal beats no signal.** A flaky journey that catches one real bug per month is worth running. Disable individual flaky steps with `// flake: <reason>` and keep the journey green. Do not delete a journey because of flake.
 4. **Run by default, opt-out for cost.** The scaffolder wires CI to run the no-auth static journey on every PR. Heavy multi-model dispatch is a cron or manual invocation, not a per-commit gate.
-5. **Findings dedup deterministically.** The dedup key is (`journey_id`, `step_id`, `severity_bucket`, normalized title). Same input must produce the same dedup outcome. Surface model disagreements as their own report section, not by suppression.
+5. **Findings dedup deterministically.** The dedup key is (`journey_id`, `step_id`, `severity_bucket`, `project`, normalized title). Same input must produce the same dedup outcome. Surface model disagreements as their own report section, not by suppression.
 6. **Auth fixtures are secrets.** `tests/e2e/fixtures/*.json` is gitignored. A leaked storageState file is a leaked session cookie. Treat with the same hygiene as `.env.local`.
 7. **The OpenRouter key is not optional.** Cross-provider second opinions are a load-bearing part of the dedup story (provider-family blind spots). The dispatcher fails loud if `OPENROUTER_API_KEY` is unset and a non-Anthropic model is requested.
 

@@ -148,17 +148,26 @@ function normalizeTitle(t: string): string {
  * Cross-severity divergence (model A says HIGH, model B says MEDIUM on the same
  * logical finding) is surfaced via cross_severity_warning rather than by merging
  * two separate dedup keys. See cross-severity collision detection below.
+ *
+ * `project` was added so a multi-project harness run (e.g. chromium-desktop
+ * and mobile-iphone-13) does not collapse two distinct findings that share a
+ * journey_id/step_id/title but come from different Playwright projects. A
+ * single-project or multi-model run has a constant `project` value across
+ * every finding, so the tuple, and therefore the grouping, is unchanged from
+ * before this field existed.
  */
 function dedupKey(
   journey_id: string,
   step_id: string,
   severity: Severity,
+  project: string,
   title: string,
 ): string {
   const tuple = [
     journey_id,
     step_id,
     severityBucket(severity),
+    project,
     normalizeTitle(title),
   ].join('|');
   return createHash('sha1').update(tuple).digest('hex').slice(0, 12);
@@ -293,6 +302,7 @@ async function main(): Promise<void> {
       finding.journey_id,
       finding.step_id,
       finding.severity,
+      finding.project ?? '',
       finding.title,
     );
 

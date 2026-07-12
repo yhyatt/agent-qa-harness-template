@@ -308,3 +308,31 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 - Module-level state in `helpers.ts` holds the captured headers. One harness process equals one report, so the state is fine in production; an exported `__resetTargetDeployment` exists for in-process tests that need a clean slate.
 
 **Revisit if:** Vercel changes the names or semantics of `x-vercel-id` / `x-vercel-deployment-url`; the `/__build` convention attracts enough adoption to deserve a typed contract beyond the loose `{ commit, deployedAt }` shape; a non-Vercel host (Cloudflare, Fly) ships its own deployment identity headers that should be captured alongside the Vercel pair.
+
+## ADR-016: Per-project report aggregation
+
+**Decided:** The default multi-project `npm run test:e2e` run (`chromium-desktop` + `mobile-iphone-13`) now produces one combined report instead of the last project's output silently overwriting the first. Three coupled changes ship together:
+
+1. Move final report generation out of `test.afterAll` in `journeys.spec.ts` and into a Playwright `globalTeardown` (`tests/e2e/global-teardown.ts`) that runs once, after every project finishes. Each project's `afterAll` now calls `writeProjectSidecar`, which stamps `project` onto its `JourneyResult`s and `StepFinding`s and writes them to a per-project JSON sidecar under a gitignored `.qa-runs/<run>/.partials/` directory. The teardown calls `aggregateRunReport`, which reads every sidecar, concatenates results and findings, and writes the combined `findings.json` and `REPORT.md`.
+2. Namespace screenshots by project: `screenshot()` now takes a `project` argument and writes to `screenshots/<project>/<journey>/<step>.png` instead of `screenshots/<journey>/<step>.png`.
+3. Add an optional `project` field to `StepFinding` (and, by extension, `DispatchedFinding` and `DedupedFinding`, which extend it) and to `JourneyResult`, and fold `project` into the `dedup-findings.ts` dedup key: `(journey_id, step_id, severity_bucket, project, normalized_title)`.
+
+**Root cause:** Playwright runs each project as a fresh worker process, which means `journeys.spec.ts`'s module-level `journeyResults` and `axeSurfaces` arrays reset per project. `test.afterAll` wrote the shared report paths (`REPORT.md`, `findings.json`) from whichever project ran last, so the other project's findings never reached disk. Screenshots had the identical bug one layer down: `screenshot()` wrote to a project-agnostic path, so both projects' PNGs landed at the same file and the second write clobbered the first. Both bugs were masked by each other before this slice: since the report was also last-writer, nobody noticed that the screenshot a surviving finding pointed at belonged to the wrong project.
+
+**Alternatives:** have each project write to its own subdirectory and leave two separate reports for a human to read side by side; append to the shared JSON from each project's `afterAll` with a file lock; drop back to `workers: 1` across projects and share one module instance (defeats the point of running two projects, and Playwright does not guarantee project execution order without it).
+
+**Rationale:**
+
+- `globalTeardown` is the only Playwright-native hook that is guaranteed to run exactly once, after every project, in the main process rather than a worker. It is the correct place to merge state that workers cannot share directly.
+- Per-project sidecars under `.partials/` keep `writeProjectSidecar` a pure, synchronous-feeling file write: no git lookup, no `/__build` fetch, no markdown rendering. Those move to `aggregateRunReport`, which now runs once instead of once per project, so the `/__build` fetch that used to happen twice (wastefully, and with a last-writer-wins result) now happens once against the merged result set.
+- Adding `project` to `dedup-findings.ts`'s dedup key is required once aggregation is real: J1-J3's stub titles are project-agnostic by design (`docs/JOURNEY-CATALOG-GUIDE.md` deliberately does not make journey titles project-specific), so two projects reporting the identically-titled step would otherwise collapse into one during dedup and one project's finding would silently vanish, which is the same class of data loss this slice exists to fix, just moved one stage downstream.
+- `StepFinding` is the single source of truth per ADR-003; `scripts/types.ts`'s `DispatchedFinding` and `DedupedFinding` extend it, so adding `project` there is the only touch site needed for the field to propagate through dispatch and dedup.
+
+**Trade-off:**
+
+- This is an additive, widening schema change: `project` is optional on the type, existing consumers that do not read it are unaffected, and there is no migration step for older `findings.json` artifacts, the same posture as ADR-013's nullable `axe_violations`.
+- Single-project runs and multi-model runs (same project, multiple models) are unaffected: `project` is constant across every finding in both cases, so the dedup key tuple, and therefore the grouping, is unchanged from before this field existed. Only findings from genuinely different projects now separate.
+- Degradation mode: if one project's worker crashes before `test.afterAll` runs, its sidecar is simply absent and `aggregateRunReport` merges what it finds. The combined report loses that project's findings for the run, which is strictly better than the old behavior (the crashed project silently overwrote or was overwritten by the surviving one, with no signal either way).
+- `PARTIALS_DIR` and its contents are gitignored the same way the rest of `.qa-runs/` is; no new top-level ignore rule is needed.
+
+**Revisit if:** Playwright changes `globalTeardown` semantics (e.g. running it per-shard instead of per-invocation) in a way that breaks the once-after-all-projects guarantee; a consuming app adds a third project and wants per-project reports as a first-class output rather than sections of one combined report; the dedup key needs a fourth axis (e.g. locale) for the same reason `project` was added here.

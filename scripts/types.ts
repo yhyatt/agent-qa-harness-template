@@ -151,7 +151,7 @@ export interface DispatchedRun {
 // ---------------------------------------------------------------------------
 
 export interface DedupedFinding extends DispatchedFinding {
-  /** sha1 hash, 12 hex chars. Derived from journey_id|step_id|severityBucket|normalizedTitle. */
+  /** sha1 hash, 12 hex chars. Derived from journey_id|step_id|severityBucket|project|normalizedTitle. */
   dedup_key: string;
   /** count of models that returned pass=false (excluding errored judgments). */
   fail_count: number;
