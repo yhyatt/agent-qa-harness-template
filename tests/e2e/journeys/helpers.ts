@@ -71,22 +71,37 @@ export function sanitizeSegment(s: string): string {
 }
 
 /**
- * Removes every `*.json` sidecar from PARTIALS_DIR, creating the dir if it is
- * absent. Called once from tests/e2e/global-setup.ts at run start so a run
- * that reuses RUN_DIR (default minute-granularity timestamp on quick reruns,
- * or a fixed QA_RUN_DIR) does not merge stale sidecars from a prior run. The
- * worst case this prevents: a narrower rerun (test:e2e:desktop after a full
- * both-projects run) leaving mobile's stale sidecar, so the desktop-only
- * report still shows mobile from the old run. Leaves the top-level
- * findings.json / REPORT.md alone; globalTeardown regenerates those.
+ * Removes every generated output of a prior run from RUN_DIR: the `*.json`
+ * sidecars under PARTIALS_DIR (creating the dir if absent), plus the
+ * top-level findings.json and REPORT.md. Called once from
+ * tests/e2e/global-setup.ts at run start so a run that reuses RUN_DIR
+ * (default minute-granularity timestamp on quick reruns, or a fixed
+ * QA_RUN_DIR) never serves a prior run's output.
+ *
+ * Two stale-data cases this closes:
+ *   - Partial merge: a narrower rerun (test:e2e:desktop after a full
+ *     both-projects run) would leave mobile's stale sidecar, so the
+ *     desktop-only report would still show mobile from the old run.
+ *   - Stale top-level report: a rerun that produces ZERO sidecars (a --grep
+ *     matching nothing, or all journeys skipped) makes globalTeardown write
+ *     nothing, so the prior run's findings.json / REPORT.md would linger and
+ *     be served as if current (the dispatcher keys on that findings.json).
+ *
+ * Does not touch screenshots/: orphaned stale screenshots are harmless since
+ * the regenerated report only references the current run's paths.
  */
-export function clearPartials(): void {
+export function clearRunOutputs(): void {
   fs.mkdirSync(PARTIALS_DIR, { recursive: true });
   for (const file of fs.readdirSync(PARTIALS_DIR)) {
     if (file.endsWith('.json')) {
       fs.rmSync(path.join(PARTIALS_DIR, file), { force: true });
     }
   }
+  // Remove the prior run's top-level report so a zero-sidecar rerun into a
+  // reused run dir does not leave stale output. force makes an absent file a
+  // no-op (fresh run dir, or first run).
+  fs.rmSync(JSON_FINDINGS_PATH, { force: true });
+  fs.rmSync(REPORT_PATH, { force: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -530,9 +545,9 @@ export async function writeProjectSidecar(
   fs.writeFileSync(tmp, JSON.stringify(sidecar, null, 2));
   // Remove the destination first: fs.renameSync cannot overwrite an existing
   // file on Windows, and a rerun into the same RUN_DIR would otherwise fail
-  // to replace the prior sidecar. globalSetup's clearPartials already removes
-  // stale sidecars at run start; this is belt-and-suspenders for a same-run
-  // rewrite of the same (project, workerIndex).
+  // to replace the prior sidecar. globalSetup's clearRunOutputs already
+  // removes stale sidecars at run start; this is belt-and-suspenders for a
+  // same-run rewrite of the same (project, workerIndex).
   fs.rmSync(file, { force: true });
   fs.renameSync(tmp, file);
 }

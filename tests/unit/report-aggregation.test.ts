@@ -18,8 +18,9 @@
  *   - A project that wrote a sidecar but produced zero JourneyResults still
  *     gets a section in the combined report (union-derived project list).
  *   - sanitizeSegment never returns a path-traversal segment.
- *   - clearPartials removes stale sidecars (globalSetup uses it so a rerun
- *     into a reused RUN_DIR does not resurrect an old project).
+ *   - clearRunOutputs removes stale sidecars AND the top-level
+ *     findings.json / REPORT.md (globalSetup uses it so a rerun into a reused
+ *     RUN_DIR neither resurrects an old project nor serves a stale report).
  *
  * QA_RUN_DIR must be set BEFORE helpers.ts is imported: module-level code in
  * helpers.ts resolves RUN_DIR / PARTIALS_DIR from process.env.QA_RUN_DIR at
@@ -186,16 +187,39 @@ describe('sanitizeSegment path safety', () => {
   });
 });
 
-describe('clearPartials', () => {
-  it('removes stale *.json sidecars from PARTIALS_DIR', async () => {
+describe('clearRunOutputs', () => {
+  it('removes stale sidecars and the top-level findings.json / REPORT.md', async () => {
+    // Seed a full prior-run output set: a sidecar plus both top-level files.
     await helpers.writeProjectSidecar('stale-project', 7, [makeSameFindingResult()], []);
-    // Sanity: the sidecar exists before the clear.
+    await fs.writeFile(helpers.JSON_FINDINGS_PATH, '{"run_id":"stale"}');
+    await fs.writeFile(helpers.REPORT_PATH, '# stale report\n');
+
+    // Sanity: all three exist before the clear.
     const before = await fs.readdir(helpers.PARTIALS_DIR);
     expect(before.some((f) => f.endsWith('.json'))).toBe(true);
+    await expect(fs.access(helpers.JSON_FINDINGS_PATH)).resolves.toBeUndefined();
+    await expect(fs.access(helpers.REPORT_PATH)).resolves.toBeUndefined();
 
-    helpers.clearPartials();
+    helpers.clearRunOutputs();
 
+    // All three are gone.
     const after = await fs.readdir(helpers.PARTIALS_DIR);
     expect(after.some((f) => f.endsWith('.json'))).toBe(false);
+    await expect(fs.access(helpers.JSON_FINDINGS_PATH)).rejects.toThrow();
+    await expect(fs.access(helpers.REPORT_PATH)).rejects.toThrow();
+  });
+
+  it('leaves no stale findings.json after a zero-sidecar rerun into a reused dir', async () => {
+    // Simulate a reused run dir that still holds a prior run's report, then a
+    // rerun that matches no journeys (zero sidecars). clearRunOutputs at run
+    // start plus aggregateRunReport writing nothing must leave no marker.
+    await fs.writeFile(helpers.JSON_FINDINGS_PATH, '{"run_id":"stale"}');
+    await fs.writeFile(helpers.REPORT_PATH, '# stale report\n');
+
+    helpers.clearRunOutputs();
+    await helpers.aggregateRunReport('http://127.0.0.1:0');
+
+    await expect(fs.access(helpers.JSON_FINDINGS_PATH)).rejects.toThrow();
+    await expect(fs.access(helpers.REPORT_PATH)).rejects.toThrow();
   });
 });
