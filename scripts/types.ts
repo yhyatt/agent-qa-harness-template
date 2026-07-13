@@ -95,7 +95,7 @@ export interface TargetDeployment {
 
 /**
  * Renders a TargetDeployment as a single markdown header line. Shared by the
- * journey-runtime sidecar (helpers.ts writeReport) and the post-dispatch
+ * journey-runtime report (helpers.ts aggregateRunReport) and the post-dispatch
  * report (generate-report.ts), so the two stay in sync as fields are added.
  * Emits "unknown" when the field is null (older artifacts, or no journey
  * ran). Otherwise composes a comma-separated description of every non-null
@@ -151,7 +151,7 @@ export interface DispatchedRun {
 // ---------------------------------------------------------------------------
 
 export interface DedupedFinding extends DispatchedFinding {
-  /** sha1 hash, 12 hex chars. Derived from journey_id|step_id|severityBucket|normalizedTitle. */
+  /** sha1 hash, 12 hex chars. Derived from journey_id|step_id|severityBucket|project|normalizedTitle. */
   dedup_key: string;
   /** count of models that returned pass=false (excluding errored judgments). */
   fail_count: number;

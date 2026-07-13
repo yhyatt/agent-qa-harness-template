@@ -6,11 +6,15 @@
  * delegated to `locale-snapshot.ts` (which is locale-agnostic).
  *
  * Capture utilities:
- *   - screenshot       per-journey, per-step
- *   - attachListeners  console errors + network 4xx/5xx
- *   - runAxe           axe-core a11y scan with WCAG 2.1 AA tags
- *   - hasAuthFixture   storageState fixture detection
- *   - writeReport      markdown report writer
+ *   - screenshot            per-journey, per-step, namespaced by project
+ *   - attachListeners       console errors + network 4xx/5xx
+ *   - runAxe                axe-core a11y scan with WCAG 2.1 AA tags
+ *   - hasAuthFixture        storageState fixture detection
+ *   - writeProjectSidecar   per-project results/findings sidecar writer
+ *   - aggregateRunReport    merges every project's sidecar into one combined
+ *                           findings.json / REPORT.md; called once from
+ *                           tests/e2e/global-teardown.ts after every
+ *                           Playwright project has finished
  *
  * Output goes to a gitignored `.qa-runs/<YYYY-MM-DD-HHmm>/` directory.
  */
@@ -34,13 +38,77 @@ const RUN_ID =
   process.env.QA_RUN_DIR ??
   new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
 
-const RUN_DIR = path.resolve('.qa-runs', RUN_ID);
+export const RUN_DIR = path.resolve('.qa-runs', RUN_ID);
 export const SCREENSHOT_BASE = path.join(RUN_DIR, 'screenshots');
 export const REPORT_PATH = path.join(RUN_DIR, 'REPORT.md');
 export const JSON_FINDINGS_PATH = path.join(RUN_DIR, 'findings.json');
+/**
+ * Per-project sidecars written by writeProjectSidecar, one file per
+ * Playwright project/worker. aggregateRunReport reads every file here and
+ * merges them into the combined findings.json / REPORT.md after all
+ * projects finish (Playwright globalTeardown).
+ */
+export const PARTIALS_DIR = path.join(RUN_DIR, '.partials');
 
 fs.mkdirSync(RUN_DIR, { recursive: true });
 fs.mkdirSync(SCREENSHOT_BASE, { recursive: true });
+fs.mkdirSync(PARTIALS_DIR, { recursive: true });
+
+/**
+ * Turns a Playwright project name into a traversal-safe path segment for
+ * screenshot directories and sidecar filenames. Project names come from
+ * playwright.config.ts (author-controlled slugs like `chromium-desktop`), so
+ * this is a defensive sanitizer, not a collision-avoidance scheme.
+ *
+ * Safe names ([a-zA-Z0-9._-], e.g. `chromium-desktop`, `v1.2`) pass through
+ * verbatim. Any disallowed character maps to a hyphen. A dot-only (`.`, `..`)
+ * or empty result would escape the run dir via path.join, so it is replaced
+ * with the placeholder `_`.
+ */
+export function sanitizeSegment(s: string): string {
+  const cleaned = s.replace(/[^a-zA-Z0-9._-]/g, '-');
+  // Guard against path traversal: a dot-only or empty segment ('.', '..', '')
+  // could escape the run dir via path.join. Replace with a safe placeholder.
+  if (cleaned === '' || /^\.+$/.test(cleaned)) return '_';
+  return cleaned;
+}
+
+/**
+ * Removes the run-stage generated output of a prior run from RUN_DIR, so a run
+ * that reuses RUN_DIR (default minute-granularity timestamp on quick reruns,
+ * or a fixed QA_RUN_DIR) does not serve a prior run's report. Called once from
+ * tests/e2e/global-setup.ts at run start. Clears:
+ *   - `.partials/ *.json`   per-project sidecars (dir created if absent)
+ *   - findings.json          combined run report JSON (JSON_FINDINGS_PATH)
+ *   - REPORT.md              combined run report markdown (REPORT_PATH)
+ *
+ * Stale-data cases this closes:
+ *   - Partial merge: a narrower rerun (test:e2e:desktop after a full
+ *     both-projects run) would leave mobile's stale sidecar, so the
+ *     desktop-only report would still show mobile from the old run.
+ *   - Stale run report: a rerun that produces ZERO sidecars (a --grep
+ *     matching nothing, or all journeys skipped) makes globalTeardown write
+ *     nothing, so the prior run's findings.json / REPORT.md would linger and
+ *     be served as if current (the dispatcher keys on that findings.json).
+ *
+ * Does not touch screenshots/: orphaned stale screenshots are harmless since a
+ * regenerated report only references the current run's paths. Also leaves the
+ * downstream pipeline artifacts (findings.dispatched.json, findings.deduped.json,
+ * REPORT.final.md) to the dispatch/dedup/report scripts that own them.
+ *
+ * force: true on each rmSync makes an absent file a no-op (fresh run dir, or a
+ * stage that did not run).
+ */
+export function clearRunOutputs(): void {
+  fs.mkdirSync(PARTIALS_DIR, { recursive: true });
+  for (const file of fs.readdirSync(PARTIALS_DIR)) {
+    if (file.endsWith('.json')) {
+      fs.rmSync(path.join(PARTIALS_DIR, file), { force: true });
+    }
+  }
+  fs.rmSync(JSON_FINDINGS_PATH, { force: true });
+  fs.rmSync(REPORT_PATH, { force: true });
+}
 
 // ---------------------------------------------------------------------------
 // Types - the canonical per-step JSON schema (see docs/PHILOSOPHY.md)
@@ -93,6 +161,14 @@ export interface StepFinding {
   judgment: string;
   /** Which model produced this finding. Filled in by the dispatcher. */
   model?: string;
+  /**
+   * Which Playwright project (e.g. "chromium-desktop") produced this
+   * finding. Stamped onto every finding at sidecar-write time by
+   * writeProjectSidecar, from testInfo.project.name. Optional on the type
+   * because in-repo test fixtures build a StepFinding by hand without a
+   * project; every finding emitted by the harness itself always carries it.
+   */
+  project?: string;
   /** Optional extra notes. */
   notes?: string;
 }
@@ -104,6 +180,12 @@ export interface JourneyResult {
   status: JourneyStatus;
   durationMs: number;
   findings: StepFinding[];
+  /**
+   * Which Playwright project produced this result. Stamped at sidecar-write
+   * time by writeProjectSidecar, from testInfo.project.name. Always present
+   * in emitted artifacts (findings.json, REPORT.md).
+   */
+  project?: string;
 }
 
 export interface AxeSurface {
@@ -119,10 +201,11 @@ export interface AxeSurface {
 
 export async function screenshot(
   page: Page,
+  project: string,
   journeyId: string,
   stepName: string,
 ): Promise<string> {
-  const dir = path.join(SCREENSHOT_BASE, journeyId);
+  const dir = path.join(SCREENSHOT_BASE, sanitizeSegment(project), journeyId);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${stepName}.png`);
   await page.screenshot({ path: file, fullPage: false });
@@ -408,14 +491,138 @@ export function makeFinding(
 }
 
 // ---------------------------------------------------------------------------
-// Report writer
+// Per-project sidecar writer + globalTeardown aggregation
+//
+// Playwright runs each project (chromium-desktop, mobile-iphone-13) in its
+// own worker process, so this module gets a fresh copy per project and the
+// module-level journeyResults/axeSurfaces arrays in journeys.spec.ts only
+// ever hold one project's results. Each project's test.afterAll calls
+// writeProjectSidecar to persist its own slice under PARTIALS_DIR; a
+// Playwright globalTeardown (tests/e2e/global-teardown.ts) then calls
+// aggregateRunReport exactly once, after every project has finished, to
+// merge all sidecars into the single combined findings.json / REPORT.md that
+// the dispatcher, dedup, and generate-report scripts read.
 // ---------------------------------------------------------------------------
 
-export async function writeReport(
+interface ProjectSidecar {
+  project: string;
+  worker_index: number;
+  results: JourneyResult[];
+  axe_surfaces: AxeSurface[];
+  target_deployment_headers: CapturedVercelHeaders | null;
+}
+
+/**
+ * Writes one project's results and axe surfaces to a sidecar file under
+ * PARTIALS_DIR. Stamps `project` onto every JourneyResult and onto every
+ * StepFinding nested inside each result's findings, so downstream
+ * aggregation and dedup can key on it without a second pass. Pure file
+ * write: no git lookup, no /__build fetch, no markdown rendering. Those
+ * happen once in aggregateRunReport after every project has written its
+ * sidecar.
+ */
+export async function writeProjectSidecar(
+  project: string,
+  workerIndex: number,
   results: JourneyResult[],
   axeSurfaces: AxeSurface[],
-  targetUrl: string,
 ): Promise<void> {
+  const stampedResults: JourneyResult[] = results.map((r) => ({
+    ...r,
+    project,
+    findings: r.findings.map((f) => ({ ...f, project })),
+  }));
+
+  const sidecar: ProjectSidecar = {
+    project,
+    worker_index: workerIndex,
+    results: stampedResults,
+    axe_surfaces: axeSurfaces,
+    target_deployment_headers: getTargetDeployment(),
+  };
+
+  // Write atomically: write to a temp file, then rename into place. A rename
+  // on the same filesystem is atomic, so aggregateRunReport (running in a
+  // separate globalTeardown process) never observes a half-written sidecar,
+  // even if this worker is killed mid-write. The tmp name is per
+  // (project, workerIndex) so concurrent workers never share a temp path.
+  const file = path.join(PARTIALS_DIR, `${sanitizeSegment(project)}__${workerIndex}.json`);
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(sidecar, null, 2));
+  // Remove the destination first: fs.renameSync cannot overwrite an existing
+  // file on Windows, and a rerun into the same RUN_DIR would otherwise fail
+  // to replace the prior sidecar. globalSetup's clearRunOutputs already
+  // removes stale sidecars at run start; this is belt-and-suspenders for a
+  // same-run rewrite of the same (project, workerIndex).
+  fs.rmSync(file, { force: true });
+  fs.renameSync(tmp, file);
+}
+
+/**
+ * Reads every sidecar under PARTIALS_DIR and merges them into the combined
+ * findings.json + REPORT.md at RUN_DIR. Called once from
+ * tests/e2e/global-teardown.ts after all Playwright projects finish.
+ *
+ * Zero sidecars (no journeys ran, or every project's afterAll failed before
+ * writing one) writes nothing and returns. This preserves the
+ * pre-aggregation behavior: a run with no journeys leaves no findings.json
+ * marker, and the dispatcher's discovery layer keys on that marker's
+ * presence to decide whether a run is worth dispatching.
+ */
+export async function aggregateRunReport(targetUrl: string): Promise<void> {
+  let partialFiles: string[];
+  try {
+    // Sorted so the merged results/findings order and the target_deployment
+    // tie-break below are stable run-over-run (PHILOSOPHY wants clean diffs).
+    partialFiles = fs
+      .readdirSync(PARTIALS_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .sort();
+  } catch (err) {
+    // A missing partials dir means genuinely zero sidecars (no journeys ran):
+    // return quietly, leaving no findings.json marker so the dispatcher skips
+    // the run. Any other error (permissions, transient FS failure) is a real
+    // problem and must be loud, not silently rendered as a clean empty run.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+
+  if (partialFiles.length === 0) {
+    return;
+  }
+
+  // Parse each sidecar independently: a single corrupt or truncated sidecar
+  // must not sink the whole run. Skip-and-warn on failure so the healthy
+  // projects still aggregate, matching ADR-016's degradation contract (a bad
+  // sidecar drops that one project, the rest survive).
+  const sidecars: ProjectSidecar[] = [];
+  for (const file of partialFiles) {
+    try {
+      const text = fs.readFileSync(path.join(PARTIALS_DIR, file), 'utf-8');
+      sidecars.push(JSON.parse(text) as ProjectSidecar);
+    } catch (err) {
+      process.stderr.write(
+        `note: skipping unreadable sidecar ${file} (${err instanceof Error ? err.message : String(err)}); its project is dropped from this run's report\n`,
+      );
+    }
+  }
+
+  // Every sidecar failed to parse. Treat as zero sidecars: write no marker.
+  if (sidecars.length === 0) {
+    return;
+  }
+
+  const results: JourneyResult[] = sidecars.flatMap((s) => s.results);
+  const axeSurfaces: AxeSurface[] = sidecars.flatMap((s) => s.axe_surfaces);
+
+  // Pick target_deployment_headers from the first sidecar that actually
+  // captured a vercel_id; fall back to the first sidecar's headers (which
+  // may be all-null, e.g. a non-Vercel target) if none did.
+  const withVercelId = sidecars.find((s) => s.target_deployment_headers?.vercel_id != null);
+  const headers = (withVercelId ?? sidecars[0])?.target_deployment_headers ?? null;
+
   const ts = new Date().toISOString();
 
   let gitSha = 'unknown';
@@ -435,7 +642,6 @@ export async function writeReport(
   // missing (non-Vercel host) we emit an object with nulls instead of a bare
   // null, because at least one journey ran. The outer field is null only if
   // no journey ran at all (results is empty AND no headers were captured).
-  const headers = getTargetDeployment();
   const journeyRan = results.length > 0;
   const buildEndpoint = await buildEndpointPromise;
 
@@ -450,7 +656,9 @@ export async function writeReport(
     };
   }
 
-  // JSON sidecar (source of truth for tooling)
+  // JSON sidecar (source of truth for tooling). Top-level keys are
+  // unchanged from the pre-aggregation shape; results and findings now
+  // carry `project`.
   const allFindings = results.flatMap((r) => r.findings);
   fs.writeFileSync(
     JSON_FINDINGS_PATH,
@@ -466,6 +674,7 @@ export async function writeReport(
           status: r.status,
           durationMs: r.durationMs,
           finding_count: r.findings.length,
+          project: r.project,
         })),
         findings: allFindings,
         axe_surfaces: axeSurfaces,
@@ -475,58 +684,77 @@ export async function writeReport(
     ),
   );
 
-  // Markdown report (rendering of the JSON)
+  // Markdown report (rendering of the JSON), grouped by project so a
+  // multi-project run reads as one document instead of two projects
+  // overwriting each other.
   const lines: string[] = [
     `# QA run: ${ts}`,
     `Target: ${targetUrl}`,
     `Target deployment: ${formatTargetDeploymentLine(targetDeployment)}`,
     `Harness SHA: ${gitSha}`,
     `Run dir: ${RUN_DIR}`,
-    '',
-    '## Summary',
   ];
 
-  for (const r of results) {
-    const dur = (r.durationMs / 1000).toFixed(1);
-    lines.push(`- ${r.id}: ${r.status} (${dur}s, ${r.findings.length} findings)`);
-  }
+  // Project sections come from the UNION of every sidecar's declared project
+  // and any project seen in results or axe surfaces, so a project that ran but
+  // produced zero JourneyResults (only axe surfaces, or nothing) still gets a
+  // section instead of silently vanishing. Sorted for a deterministic report.
+  const projects = [
+    ...new Set([
+      ...sidecars.map((s) => s.project),
+      ...results.map((r) => r.project ?? 'unknown'),
+      ...axeSurfaces.map((s) => s.project),
+    ]),
+  ].sort();
 
-  lines.push('', '## Findings');
+  for (const project of projects) {
+    const projectResults = results.filter((r) => (r.project ?? 'unknown') === project);
+    const projectFindings = projectResults.flatMap((r) => r.findings);
 
-  if (allFindings.length === 0) {
-    lines.push('', 'No findings.');
-  } else {
-    for (const f of allFindings) {
-      lines.push('', `### ${f.severity}: ${f.title}`);
-      lines.push(`- Step: ${f.step_id}`);
-      lines.push(`- Action: ${f.action}`);
-      lines.push(`- Bucket: ${f.bucket}`);
-      if (f.screenshot_path) lines.push(`- Screenshot: ${f.screenshot_path}`);
-      if (f.console_errors.length > 0) {
-        lines.push(`- Console errors: ${f.console_errors.join('; ')}`);
-      } else {
-        lines.push('- Console errors: none');
+    lines.push('', `## Project: ${project}`, '', '### Summary');
+
+    for (const r of projectResults) {
+      const dur = (r.durationMs / 1000).toFixed(1);
+      lines.push(`- ${r.id}: ${r.status} (${dur}s, ${r.findings.length} findings)`);
+    }
+
+    lines.push('', '### Findings');
+
+    if (projectFindings.length === 0) {
+      lines.push('', 'No findings.');
+    } else {
+      for (const f of projectFindings) {
+        lines.push('', `#### ${f.severity}: ${f.title}`);
+        lines.push(`- Step: ${f.step_id}`);
+        lines.push(`- Action: ${f.action}`);
+        lines.push(`- Bucket: ${f.bucket}`);
+        if (f.screenshot_path) lines.push(`- Screenshot: ${f.screenshot_path}`);
+        if (f.console_errors.length > 0) {
+          lines.push(`- Console errors: ${f.console_errors.join('; ')}`);
+        } else {
+          lines.push('- Console errors: none');
+        }
+        if (f.network_failures.length > 0) {
+          lines.push(`- Network failures: ${f.network_failures.join('; ')}`);
+        } else {
+          lines.push('- Network failures: none');
+        }
+        const axeLabel =
+          f.axe_violations === null
+            ? 'not scanned'
+            : f.axe_violations < 0
+              ? 'scan failed'
+              : `${f.axe_violations} violations`;
+        const top3str =
+          f.axe_top3.length > 0 ? `: top 3: ${f.axe_top3.join(', ')}` : '';
+        lines.push(`- Axe violations: ${axeLabel}${top3str}`);
+        if (f.locale_snapshot.length > 0) {
+          lines.push(`- Locale snapshot: ${f.locale_snapshot.slice(0, 5).join(' | ')}`);
+        }
+        if (f.judgment) lines.push(`- Judgment: ${f.judgment}`);
+        if (f.notes) lines.push(`- Notes: ${f.notes}`);
+        if (f.model) lines.push(`- Model: ${f.model}`);
       }
-      if (f.network_failures.length > 0) {
-        lines.push(`- Network failures: ${f.network_failures.join('; ')}`);
-      } else {
-        lines.push('- Network failures: none');
-      }
-      const axeLabel =
-        f.axe_violations === null
-          ? 'not scanned'
-          : f.axe_violations < 0
-            ? 'scan failed'
-            : `${f.axe_violations} violations`;
-      const top3str =
-        f.axe_top3.length > 0 ? `: top 3: ${f.axe_top3.join(', ')}` : '';
-      lines.push(`- Axe violations: ${axeLabel}${top3str}`);
-      if (f.locale_snapshot.length > 0) {
-        lines.push(`- Locale snapshot: ${f.locale_snapshot.slice(0, 5).join(' | ')}`);
-      }
-      if (f.judgment) lines.push(`- Judgment: ${f.judgment}`);
-      if (f.notes) lines.push(`- Notes: ${f.notes}`);
-      if (f.model) lines.push(`- Model: ${f.model}`);
     }
   }
 

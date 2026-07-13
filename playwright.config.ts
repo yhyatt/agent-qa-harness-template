@@ -52,6 +52,8 @@ const TARGET = process.env.TEST_TARGET_URL ?? 'http://localhost:3000';
 export default defineConfig({
   testDir: './tests/e2e/journeys',
   outputDir: '.qa-runs/playwright-output',
+  globalSetup: './tests/e2e/global-setup.ts',
+  globalTeardown: './tests/e2e/global-teardown.ts',
   timeout: 60_000,
   retries: 0,
   // Journeys can share state across tests (join code from J1 -> J2).

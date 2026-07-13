@@ -235,6 +235,7 @@ function renderFindingBody(
   }
 
   lines.push(`- Step: ${f.step_id} (${f.journey_id})`);
+  lines.push(`- Project: ${escapeMarkdownInline(f.project ?? 'unknown')}`);
   lines.push(`- Action: ${escapeMarkdownInline(f.action)}`);
   lines.push(`- Screenshot: ${normalizeScreenshotPath(f.screenshot_path)}`);
 
@@ -302,6 +303,7 @@ function renderDisagreementEntry(f: DedupedFinding): string[] {
   const lines: string[] = [];
   lines.push('', `### ${f.severity}: ${escapeMarkdownInline(f.title)}`);
   lines.push(`- Step: ${f.step_id} (${f.journey_id})`);
+  lines.push(`- Project: ${escapeMarkdownInline(f.project ?? 'unknown')}`);
   lines.push(`- Action: ${escapeMarkdownInline(f.action)}`);
   lines.push(`- Screenshot: ${normalizeScreenshotPath(f.screenshot_path)}`);
 
@@ -368,7 +370,8 @@ function renderSeveritySection(
           : f.fail_count === f.total_count && f.total_count > 0
             ? ` (${f.total_count}/${f.total_count} models failed)`
             : ` (all pass)`;
-      lines.push(`- ${f.step_id}: ${escapeMarkdownInline(f.title)}${failInfo}`);
+      const projectTag = ` [${escapeMarkdownInline(f.project ?? 'unknown')}]`;
+      lines.push(`- ${f.step_id}${projectTag}: ${escapeMarkdownInline(f.title)}${failInfo}`);
     } else {
       const headLabel = partial ? `${f.severity} (N-1 dissent)` : f.severity;
       lines.push('', `### ${headLabel}: ${escapeMarkdownInline(f.title)}`);
@@ -392,6 +395,8 @@ interface RawJourneyResult {
   status: string;
   durationMs: number;
   finding_count: number;
+  /** Playwright project this journey ran under. Absent on pre-ADR-016 artifacts. */
+  project?: string;
 }
 
 interface RawRunJson {
@@ -477,30 +482,43 @@ async function main(): Promise<void> {
     }));
   }
 
-  // 5. Compute journey summaries
-  // Seed journey IDs from findings.json results (captures zero-finding journeys).
-  // Fall back to deriving IDs from deduped findings if results are unavailable.
-  const findingJourneyIds = new Set(allFindings.map((f) => f.journey_id));
-  const allJourneyIds: Set<string> = new Set(
-    rawJourneyResults
-      ? rawJourneyResults.map((r) => r.id)
-      : [...findingJourneyIds],
-  );
-  // Also include any journey IDs that appear only in deduped findings (defensive).
-  for (const jid of findingJourneyIds) {
-    allJourneyIds.add(jid);
+  // 5. Compute journey summaries, keyed by (journey_id, project).
+  // A multi-project run has the same journey_id under two projects (ADR-016);
+  // keying on the pair keeps their rows distinguishable instead of collapsing
+  // desktop and mobile into one. Seed the pairs from findings.json results
+  // (captures zero-finding journeys) and from the deduped findings themselves.
+  // project is absent on pre-ADR-016 artifacts, so it defaults to 'unknown'.
+  const projectOf = (p: string | undefined): string => p ?? 'unknown';
+  // Map key is JSON.stringify([id, project]): text-safe and collision-proof
+  // (no delimiter char can appear inside a real id or project name, unlike a
+  // raw separator).
+  const journeyKeys = new Map<string, { id: string; project: string }>();
+  const addJourneyKey = (id: string, project: string | undefined): void => {
+    const p = projectOf(project);
+    journeyKeys.set(JSON.stringify([id, p]), { id, project: p });
+  };
+  if (rawJourneyResults) {
+    for (const r of rawJourneyResults) addJourneyKey(r.id, r.project);
   }
+  for (const f of allFindings) addJourneyKey(f.journey_id, f.project);
 
   const journeySummaries: Array<{
     id: string;
+    project: string;
     status: 'ok' | 'issues';
     findingCount: number;
     agreementPct: number;
     highestSeverity: Severity;
   }> = [];
 
-  for (const jid of [...allJourneyIds].sort()) {
-    const jFindings = allFindings.filter((f) => f.journey_id === jid);
+  const sortedJourneyKeys = [...journeyKeys.values()].sort(
+    (a, b) => a.id.localeCompare(b.id) || a.project.localeCompare(b.project),
+  );
+
+  for (const { id: jid, project } of sortedJourneyKeys) {
+    const inScope = (f: DedupedFinding): boolean =>
+      f.journey_id === jid && projectOf(f.project) === project;
+    const jFindings = allFindings.filter(inScope);
     const findingCount = jFindings.length;
 
     // status: "issues" if ANY of:
@@ -508,15 +526,15 @@ async function main(): Promise<void> {
     //   2. Any partial_findings entry for this journey has majority fail (fail_count > total_count/2).
     //   3. Any disagreement entry for this journey is at HIGH severity.
     const hasUnanimousIssue = unanimous_findings
-      .filter((f) => f.journey_id === jid)
+      .filter(inScope)
       .some((f) => f.fail_count === f.total_count && f.total_count > 0);
 
     const hasMajorityFailPartial = partial_findings
-      .filter((f) => f.journey_id === jid)
+      .filter(inScope)
       .some((f) => f.fail_count > f.total_count / 2);
 
     const hasHighDisagreement = disagreements
-      .filter((f) => f.journey_id === jid)
+      .filter(inScope)
       .some((f) => f.severity === 'HIGH');
 
     const status: 'ok' | 'issues' =
@@ -536,7 +554,7 @@ async function main(): Promise<void> {
 
     const highestSeverity = maxSeverity(jFindings.map((f) => f.severity));
 
-    journeySummaries.push({ id: jid, status, findingCount, agreementPct, highestSeverity });
+    journeySummaries.push({ id: jid, project, status, findingCount, agreementPct, highestSeverity });
   }
 
   // 6. Separate findings by severity and type
@@ -567,11 +585,12 @@ async function main(): Promise<void> {
     lines.push('No journeys in this run.');
   } else {
     for (const j of journeySummaries) {
+      const label = `${j.id} [${escapeMarkdownInline(j.project)}]`;
       if (j.findingCount === 0) {
-        lines.push(`- ${j.id}: ${j.status} (0 findings)`);
+        lines.push(`- ${label}: ${j.status} (0 findings)`);
       } else {
         lines.push(
-          `- ${j.id}: ${j.status} (${j.findingCount} findings, ${j.agreementPct.toFixed(1)}% agreement, ${j.highestSeverity})`,
+          `- ${label}: ${j.status} (${j.findingCount} findings, ${j.agreementPct.toFixed(1)}% agreement, ${j.highestSeverity})`,
         );
       }
     }
@@ -633,13 +652,16 @@ async function main(): Promise<void> {
         '',
       );
     }
-    lines.push('| route | violations | top issue |');
-    lines.push('|-------|------------|-----------|');
+    lines.push('| route | project | violations | top issue |');
+    lines.push('|-------|---------|------------|-----------|');
     for (const s of axeSurfaces) {
       const violLabel = s.violations < 0 ? 'scan failed' : String(s.violations);
       const topIssue = escapeMarkdownInline(s.top3.length > 0 ? (s.top3[0] ?? '') : 'none').replace(/\|/g, '\\|');
       const safeRoute = escapeMarkdownInline(s.route).replace(/\|/g, '\\|');
-      lines.push(`| ${safeRoute} | ${violLabel} | ${topIssue} |`);
+      // project distinguishes two projects that scanned the same route (ADR-016).
+      // Absent on pre-ADR-016 artifacts, so default to 'unknown'.
+      const safeProject = escapeMarkdownInline(s.project ?? 'unknown').replace(/\|/g, '\\|');
+      lines.push(`| ${safeRoute} | ${safeProject} | ${violLabel} | ${topIssue} |`);
     }
   }
 

@@ -39,6 +39,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 // ---------------------------------------------------------------------------
+// Finding identity
+// ---------------------------------------------------------------------------
+
+/**
+ * Compound key for a finding within a run. A combined multi-project run holds
+ * two findings that share a step_id (one per Playwright project), so the
+ * dispatcher keys its finding map on (project, step_id) to keep both
+ * distinct. Findings written before the project field existed have
+ * project undefined; `?? ''` maps them to a single project-agnostic bucket,
+ * preserving the prior step_id-only behavior for single-project artifacts.
+ *
+ * Encoded with JSON.stringify rather than a raw `|` join because project is a
+ * free-form Playwright project name that could itself contain the delimiter;
+ * a structured array encoding cannot collide across different field splits.
+ */
+function findingKey(f: Pick<StepFinding, 'step_id' | 'project'>): string {
+  return JSON.stringify([f.project ?? '', f.step_id]);
+}
+
+// ---------------------------------------------------------------------------
 // Semaphore
 // ---------------------------------------------------------------------------
 
@@ -241,7 +261,7 @@ async function loadScreenshot(
 }
 
 // ---------------------------------------------------------------------------
-// Raw run JSON shape (from helpers.ts writeReport)
+// Raw run JSON shape (from helpers.ts aggregateRunReport)
 // ---------------------------------------------------------------------------
 
 interface RawRunJson {
@@ -524,10 +544,16 @@ async function main(): Promise<void> {
   const settled = await Promise.allSettled(tasks);
 
   // 7. Aggregate
-  // Build a map indexed by step_id for deterministic ordering later
+  // Build a map keyed on (project, step_id). A combined multi-project
+  // findings.json legitimately holds two findings that share a step_id (one
+  // per Playwright project, e.g. chromium-desktop and mobile-iphone-13 both
+  // emitting J1/01), so a step_id-only key would let the second project's
+  // finding overwrite the first here, and its per-model judgments would
+  // clobber the first's at lookup time. The project-qualified key keeps both
+  // findings and their judgments distinct through fan-out and aggregation.
   const findingMap = new Map<string, DispatchedFinding>();
   for (const f of findings) {
-    findingMap.set(f.step_id, {
+    findingMap.set(findingKey(f), {
       ...f,
       model_judgments: {},
     });
@@ -565,16 +591,20 @@ async function main(): Promise<void> {
       judgment.step_id = finding.step_id;
     }
 
-    const dispatched = findingMap.get(finding.step_id);
+    const dispatched = findingMap.get(findingKey(finding));
     if (dispatched) {
       dispatched.model_judgments[model] = judgment;
     }
   }
 
-  // 9. Write output with deterministic ordering
-  const sortedFindings = [...findingMap.values()].sort((a, b) =>
-    a.step_id.localeCompare(b.step_id),
-  );
+  // 9. Write output with deterministic ordering. Order by (project, step_id)
+  // so two projects' findings for the same step_id both survive and sort
+  // stably run-over-run.
+  const sortedFindings = [...findingMap.values()].sort((a, b) => {
+    const projectCmp = (a.project ?? '').localeCompare(b.project ?? '');
+    if (projectCmp !== 0) return projectCmp;
+    return a.step_id.localeCompare(b.step_id);
+  });
 
   // Sort model_judgments keys within each finding
   for (const f of sortedFindings) {

@@ -23,11 +23,13 @@ npm run test:e2e:mobile
 TEST_TARGET_URL=https://my-app.vercel.app npm run test:e2e
 ```
 
+A full multi-project run (`npm run test:e2e`, both `chromium-desktop` and `mobile-iphone-13`) now produces ONE combined report across projects: each project writes its own sidecar under a gitignored `.qa-runs/<timestamp>/.partials/`, and a Playwright `globalTeardown` merges every sidecar into the report after all projects finish, so the second project's results no longer overwrite the first's.
+
 Reports land in `.qa-runs/<timestamp>/`:
 
-- `REPORT.md` - human-readable markdown
+- `REPORT.md` - human-readable markdown, grouped by project
 - `findings.json` - structured JSON (source of truth, used by the dispatcher)
-- `screenshots/<journey>/<step>.png` - per-step screenshots
+- `screenshots/<project>/<journey>/<step>.png` - per-step screenshots, namespaced by project
 
 ## Adding a journey
 
@@ -35,7 +37,7 @@ Reports land in `.qa-runs/<timestamp>/`:
 2. Add a `test.describe('J<N>: <short name>', () => { ... })` block in `journeys.spec.ts`.
 3. Inside the test, follow the pattern:
    - `attachListeners(page)` at the start
-   - `screenshot(page, 'J<N>', '<step-name>')` at each state transition
+   - `screenshot(page, testInfo.project.name, 'J<N>', '<step-name>')` at each state transition
    - `runAxe(page)` after each significant render and push to `axeSurfaces`
    - `captureLocaleSnapshot(page)` for user-visible text
    - Push every finding with `findings.push(makeFinding({ ... }))`

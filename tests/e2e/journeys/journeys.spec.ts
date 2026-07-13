@@ -14,14 +14,22 @@
  *
  * Pattern:
  *   1. attachListeners(page) early to capture console + network
- *   2. screenshot(page, journeyId, stepName) at every state transition
+ *   2. screenshot(page, testInfo.project.name, journeyId, stepName) at every state transition
  *   3. runAxe(page) on each significant render
  *   4. captureLocaleSnapshot(page) for user-visible text
  *   5. Push StepFinding objects into a local findings[] array
  *   6. Push a JourneyResult into the shared journeyResults at the end
  *   7. expect(status).not.toBe('fail') propagates exit code
  *
- * The writeReport call in test.afterAll picks up the shared arrays automatically.
+ * Playwright runs each project (chromium-desktop, mobile-iphone-13) as a
+ * fresh copy of this module in its own worker process, so journeyResults and
+ * axeSurfaces below only ever hold one project's results. Each project's
+ * test.afterAll writes that project's slice to a per-project sidecar via
+ * writeProjectSidecar. A Playwright globalTeardown
+ * (tests/e2e/global-teardown.ts) then merges every sidecar into one combined
+ * findings.json / REPORT.md after all projects finish, so a full multi-project
+ * run produces a single report instead of the last project's afterAll
+ * clobbering the earlier one's output.
  */
 
 import { test, expect } from '@playwright/test';
@@ -30,7 +38,7 @@ import {
   attachListeners,
   runAxe,
   hasAuthFixture,
-  writeReport,
+  writeProjectSidecar,
   makeFinding,
   AUTH_FIXTURE_PATH,
   type JourneyResult,
@@ -84,7 +92,7 @@ test.describe('J1: primary-user happy path', () => {
       const listeners = attachListeners(page);
       try {
         await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-        const ss = await screenshot(page, 'J1', '01-auth-gate');
+        const ss = await screenshot(page, testInfo.project.name, 'J1', '01-auth-gate');
         findings.push(
           makeFinding({
             step_id: 'J1/01',
@@ -126,7 +134,7 @@ test.describe('J1: primary-user happy path', () => {
 
       // STEP 01: land on authed entry
       await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-      const ss01 = await screenshot(page, 'J1', '01-landed');
+      const ss01 = await screenshot(page, testInfo.project.name, 'J1', '01-landed');
       const snap01 = await captureLocaleSnapshot(page);
       const axe01 = await runAxe(page);
       axeSurfaces.push({
@@ -354,7 +362,7 @@ test.describe('J4: static surface walk', () => {
         const isExpected404 = route.includes('nonexistent');
         const httpStatus = resp?.status() ?? 0;
 
-        const ss = await screenshot(page, 'J4', `${stepNum}-${route.replace(/[/]/g, '_')}`);
+        const ss = await screenshot(page, testInfo.project.name, 'J4', `${stepNum}-${route.replace(/[/]/g, '_')}`);
         const snap = await captureLocaleSnapshot(page);
         const axe = await runAxe(page);
 
@@ -423,9 +431,15 @@ test.describe('J4: static surface walk', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Report writer - runs once after all tests in the file
+// Per-project sidecar writer - runs once after all tests in this project's
+// copy of this file. The combined report is written later by
+// aggregateRunReport in a Playwright globalTeardown, once every project has
+// finished (see tests/e2e/global-teardown.ts).
 // ---------------------------------------------------------------------------
 
-test.afterAll(async () => {
-  await writeReport(journeyResults, axeSurfaces, BASE);
+// The second arg to an afterAll hook is WorkerInfo, not TestInfo (afterAll
+// runs once per worker, outside any single test). It still carries
+// `.project.name` and `.workerIndex`, which is all we need here.
+test.afterAll(async ({}, workerInfo) => {
+  await writeProjectSidecar(workerInfo.project.name, workerInfo.workerIndex, journeyResults, axeSurfaces);
 });

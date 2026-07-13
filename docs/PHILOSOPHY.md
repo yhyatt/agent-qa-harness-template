@@ -32,7 +32,7 @@ The math is roughly: every hour the harness runs saves an hour of human audit ti
 
 A free-form agent report is hard to dedup, hard to diff between runs, and hard to consume programmatically. JSON per step gives:
 
-- **Deterministic dedup.** Hash by `(journey_id, step_id, severity, normalized_title)`. Same finding from two models collapses; disagreement surfaces.
+- **Deterministic dedup.** Hash by `(journey_id, step_id, severity, project, normalized_title)`. Same finding from two models collapses; disagreement surfaces. `project` keeps findings from different Playwright projects (e.g. `chromium-desktop` vs `mobile-iphone-13`) from collapsing into one even when their titles are identical.
 - **Run-over-run diff.** Last night's run found 12 findings, tonight's found 14. Which two are new? Trivial with JSON, painful with prose.
 - **Programmatic gates.** CI can read the JSON and fail the build on any HIGH severity finding without parsing markdown.
 - **Multi-model comparison.** Same schema across all models means dedup and disagreement detection are uniform.
@@ -47,7 +47,7 @@ Per-step schema (canonical):
   "journey_id": "J1",
   "action": "click sign-in button",
   "pass": true,
-  "screenshot_path": ".qa-runs/2026-05-19-1900/screenshots/J1/04.png",
+  "screenshot_path": ".qa-runs/2026-05-19-1900/screenshots/chromium-desktop/J1/04.png",
   "locale_snapshot": ["Sign in with Google", "By continuing you agree..."],
   "db_state": null,
   "console_errors": [],
@@ -56,7 +56,8 @@ Per-step schema (canonical):
   "axe_top3": [],
   "judgment": "Button rendered with correct copy. Click triggered OAuth redirect to expected URL.",
   "bucket": "pass",
-  "model": "anthropic/claude-sonnet-4-6"
+  "model": "anthropic/claude-sonnet-4-6",
+  "project": "chromium-desktop"
 }
 ```
 

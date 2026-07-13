@@ -7,7 +7,7 @@
  *     bucket pass, title matching the auth-blocked regex). Real INFO findings
  *     with unrelated titles still dispatch.
  *   - axe_violations: null renders as "not scanned" through the dispatch
- *     prompt and the helpers writeReport markdown path, distinctly from
+ *     prompt and the helpers aggregateRunReport markdown path, distinctly from
  *     axe_violations: 0 ("scanned, no violations").
  */
 
@@ -218,5 +218,91 @@ describe('multi-model-dispatch skip rule', () => {
     expect(skipped.every((s) => s.reason === 'auth-blocked-placeholder')).toBe(true);
     expect(skipped[0]!.title).toBe('J1 auth-blocked: no fixture');
     expect(skipped[1]!.title).toBe('J2 skipped: no code available');
+  }, 30_000);
+});
+
+describe('multi-model-dispatch project-keyed finding map', () => {
+  it('keeps both projects when two findings share a step_id (no clobber)', async () => {
+    const runDir = path.join(tmpRoot, '2026-05-21-14-00');
+    await fs.mkdir(runDir, { recursive: true });
+
+    // A combined multi-project findings.json legitimately contains two
+    // findings with the same step_id, one per Playwright project. The
+    // dispatcher must key its finding map on (project, step_id) so the second
+    // does not overwrite the first and their per-model judgments stay
+    // separate. MEDIUM/cosmetic titles keep both out of the auth-blocked
+    // skip path.
+    const desktop: StepFinding = makeFinding({
+      step_id: 'J1/01',
+      journey_id: 'J1',
+      severity: 'MEDIUM',
+      bucket: 'cosmetic',
+      title: 'header text mismatch',
+      project: 'chromium-desktop',
+    });
+    const mobile: StepFinding = makeFinding({
+      step_id: 'J1/01',
+      journey_id: 'J1',
+      severity: 'MEDIUM',
+      bucket: 'cosmetic',
+      title: 'header text mismatch',
+      project: 'mobile-iphone-13',
+    });
+
+    await fs.writeFile(
+      path.join(runDir, 'findings.json'),
+      JSON.stringify({
+        run_id: '2026-05-21-14-00',
+        timestamp: '2026-05-21T14:00:00Z',
+        target: 'https://example.com',
+        harness_sha: 'test',
+        target_deployment: null,
+        results: [],
+        findings: [desktop, mobile],
+        axe_surfaces: [],
+      }),
+    );
+
+    const result = spawnSync(TSX_BIN, [DISPATCH_SCRIPT], {
+      env: {
+        ...process.env,
+        QA_RUN_DIR: runDir,
+        MOCK_DISPATCH: '1',
+        QA_ALLOW_SINGLE_FAMILY: '1',
+        QA_MODELS: 'mock-a,mock-b,mock-c',
+      },
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    });
+
+    if (result.status !== 0) {
+      throw new Error(
+        `dispatch script exited ${result.status}: stdout=${result.stdout} stderr=${result.stderr}`,
+      );
+    }
+
+    const dispatchedText = await fs.readFile(
+      path.join(runDir, 'findings.dispatched.json'),
+      'utf8',
+    );
+    const dispatched = JSON.parse(dispatchedText) as DispatchedRun;
+
+    // Both project findings survive the finding-map keying; neither clobbers
+    // the other despite the shared step_id.
+    expect(dispatched.findings.length).toBe(2);
+    expect(dispatched.findings.map((f) => f.project).sort()).toEqual([
+      'chromium-desktop',
+      'mobile-iphone-13',
+    ]);
+
+    // Every dispatched finding still reports step_id J1/01, so the survivors
+    // are distinguished only by project, exactly the collision the fix targets.
+    expect(dispatched.findings.every((f) => f.step_id === 'J1/01')).toBe(true);
+
+    // Each finding carries its own three-model judgments; the second project's
+    // judgments did not overwrite the first's at lookup time.
+    for (const f of dispatched.findings) {
+      expect(Object.keys(f.model_judgments).sort()).toEqual(['mock-a', 'mock-b', 'mock-c']);
+    }
   }, 30_000);
 });
