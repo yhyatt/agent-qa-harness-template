@@ -95,7 +95,7 @@ export interface TargetDeployment {
 
 /**
  * Renders a TargetDeployment as a single markdown header line. Shared by the
- * journey-runtime sidecar (helpers.ts writeReport) and the post-dispatch
+ * journey-runtime report (helpers.ts aggregateRunReport) and the post-dispatch
  * report (generate-report.ts), so the two stay in sync as fields are added.
  * Emits "unknown" when the field is null (older artifacts, or no journey
  * ran). Otherwise composes a comma-separated description of every non-null

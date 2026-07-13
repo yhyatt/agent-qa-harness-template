@@ -232,7 +232,7 @@ If you already have Playwright tests, the migration is:
 2. Refactor each test to push findings into the shared `findings[]` accumulator
 3. Replace `expect()` assertions with the harness pattern: capture the failure as a finding, then `expect(status).not.toBe('fail')` at the end
 4. Add the journey to the `J<N>` numbering scheme
-5. Wire the helpers (`screenshot`, `attachListeners`, `runAxe`, `writeReport`)
+5. Wire the capture helpers (`screenshot`, `attachListeners`, `runAxe`). Report writing is handled by the harness: each project's `test.afterAll` calls `writeProjectSidecar`, and the Playwright `globalTeardown` calls `aggregateRunReport` to merge every project's sidecar into the combined report.
 
 Most tests port over in under an hour each.
 

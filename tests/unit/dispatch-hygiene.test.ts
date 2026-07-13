@@ -7,7 +7,7 @@
  *     bucket pass, title matching the auth-blocked regex). Real INFO findings
  *     with unrelated titles still dispatch.
  *   - axe_violations: null renders as "not scanned" through the dispatch
- *     prompt and the helpers writeReport markdown path, distinctly from
+ *     prompt and the helpers aggregateRunReport markdown path, distinctly from
  *     axe_violations: 0 ("scanned, no violations").
  */
 

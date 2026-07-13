@@ -261,7 +261,7 @@ async function loadScreenshot(
 }
 
 // ---------------------------------------------------------------------------
-// Raw run JSON shape (from helpers.ts writeReport)
+// Raw run JSON shape (from helpers.ts aggregateRunReport)
 // ---------------------------------------------------------------------------
 
 interface RawRunJson {

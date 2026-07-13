@@ -17,15 +17,13 @@
  *     scan depends on.
  *   - A project that wrote a sidecar but produced zero JourneyResults still
  *     gets a section in the combined report (union-derived project list).
- *   - sanitizeSegment never returns a path-traversal segment and is
- *     collision-resistant for names that required sanitizing (a hash suffix
- *     makes distinct originals colliding on one segment astronomically
- *     unlikely).
- *   - clearRunOutputs removes the full generated-output set (sidecars, the
- *     run report findings.json / REPORT.md, and the downstream
- *     findings.dispatched.json / findings.deduped.json / REPORT.final.md), so
- *     globalSetup wipes it at run start and a rerun into a reused RUN_DIR
- *     neither resurrects an old project nor serves any stale artifact.
+ *   - sanitizeSegment is traversal-safe: safe names pass through verbatim,
+ *     disallowed chars map to a hyphen, and a dot-only or empty result is
+ *     replaced with the placeholder `_`.
+ *   - clearRunOutputs removes the run-stage output set (sidecars plus the run
+ *     report findings.json / REPORT.md), so globalSetup wipes it at run start
+ *     and a rerun into a reused RUN_DIR neither resurrects an old project nor
+ *     serves a stale run report.
  *
  * QA_RUN_DIR must be set BEFORE helpers.ts is imported: module-level code in
  * helpers.ts resolves RUN_DIR / PARTIALS_DIR from process.env.QA_RUN_DIR at
@@ -77,16 +75,10 @@ beforeEach(async () => {
   await Promise.all(
     entries.map((e) => fs.rm(path.join(helpers.PARTIALS_DIR, e), { force: true })),
   );
-  // Remove every run-dir artifact so no test inherits one from an earlier test
-  // in the same worker (the run dir is shared across this file's tests).
+  // Remove the run-stage artifacts so no test inherits one from an earlier
+  // test in the same worker (the run dir is shared across this file's tests).
   await Promise.all(
-    [
-      helpers.JSON_FINDINGS_PATH,
-      helpers.REPORT_PATH,
-      helpers.DISPATCHED_FINDINGS_PATH,
-      helpers.DEDUPED_FINDINGS_PATH,
-      helpers.FINAL_REPORT_PATH,
-    ].map((p) => fs.rm(p, { force: true })),
+    [helpers.JSON_FINDINGS_PATH, helpers.REPORT_PATH].map((p) => fs.rm(p, { force: true })),
   );
 });
 
@@ -197,7 +189,7 @@ describe('report aggregation across Playwright projects', () => {
   });
 });
 
-describe('sanitizeSegment path safety and collision resistance', () => {
+describe('sanitizeSegment path safety', () => {
   it('leaves already-safe names unchanged', () => {
     expect(helpers.sanitizeSegment('chromium-desktop')).toBe('chromium-desktop');
     expect(helpers.sanitizeSegment('mobile-iphone-13')).toBe('mobile-iphone-13');
@@ -205,37 +197,16 @@ describe('sanitizeSegment path safety and collision resistance', () => {
     expect(helpers.sanitizeSegment('v1.2')).toBe('v1.2');
   });
 
-  it('does not collapse distinct names that clean to the same segment', () => {
-    // 'a/b', 'a b', and 'a-b' all naively clean to 'a-b'. Only the already
-    // safe 'a-b' is returned verbatim; the others get a distinct hash suffix,
-    // so they do not collide on one segment (no last-writer clobber).
-    const slash = helpers.sanitizeSegment('a/b');
-    const space = helpers.sanitizeSegment('a b');
-    const safe = helpers.sanitizeSegment('a-b');
-
-    expect(safe).toBe('a-b');
-    expect(slash).not.toBe(safe);
-    expect(space).not.toBe(safe);
-    expect(slash).not.toBe(space);
-    // The sanitized variants still start from the cleaned base.
-    expect(slash.startsWith('a-b-')).toBe(true);
-    expect(space.startsWith('a-b-')).toBe(true);
+  it('maps disallowed characters to a hyphen', () => {
+    expect(helpers.sanitizeSegment('a/b')).toBe('a-b');
+    expect(helpers.sanitizeSegment('a b')).toBe('a-b');
   });
 
-  it('makes dot-only and empty names safe and mutually distinct', () => {
-    const dot = helpers.sanitizeSegment('.');
-    const dotdot = helpers.sanitizeSegment('..');
-    const dotdotdot = helpers.sanitizeSegment('...');
-    const empty = helpers.sanitizeSegment('');
-
-    // None is a bare dot-run or empty (would escape the run dir).
-    for (const seg of [dot, dotdot, dotdotdot, empty]) {
-      expect(seg).not.toBe('');
-      expect(/^\.+$/.test(seg)).toBe(false);
-      expect(seg.startsWith('_-')).toBe(true);
-    }
-    // All four are mutually distinct.
-    expect(new Set([dot, dotdot, dotdotdot, empty]).size).toBe(4);
+  it('replaces dot-only and empty names with the placeholder _', () => {
+    expect(helpers.sanitizeSegment('.')).toBe('_');
+    expect(helpers.sanitizeSegment('..')).toBe('_');
+    expect(helpers.sanitizeSegment('...')).toBe('_');
+    expect(helpers.sanitizeSegment('')).toBe('_');
   });
 
   it('is deterministic for the same input', () => {
@@ -244,23 +215,15 @@ describe('sanitizeSegment path safety and collision resistance', () => {
 });
 
 describe('clearRunOutputs', () => {
-  it('removes the full generated-output set: sidecars, run report, and downstream artifacts', async () => {
-    // Seed a full prior-run output set: a sidecar, the run-stage report
-    // (findings.json / REPORT.md), and the downstream pipeline artifacts
-    // (findings.dispatched.json / findings.deduped.json / REPORT.final.md).
+  it('removes the run-stage output set: sidecars plus findings.json / REPORT.md', async () => {
+    // Seed a prior-run output set: a sidecar plus the run-stage report.
     await helpers.writeProjectSidecar('stale-project', 7, [makeSameFindingResult()], []);
-    const topLevel = [
-      helpers.JSON_FINDINGS_PATH,
-      helpers.REPORT_PATH,
-      helpers.DISPATCHED_FINDINGS_PATH,
-      helpers.DEDUPED_FINDINGS_PATH,
-      helpers.FINAL_REPORT_PATH,
-    ];
+    const topLevel = [helpers.JSON_FINDINGS_PATH, helpers.REPORT_PATH];
     for (const p of topLevel) {
       await fs.writeFile(p, '{"run_id":"stale"}');
     }
 
-    // Sanity: the sidecar and every top-level artifact exist before the clear.
+    // Sanity: the sidecar and both run-stage files exist before the clear.
     const before = await fs.readdir(helpers.PARTIALS_DIR);
     expect(before.some((f) => f.endsWith('.json'))).toBe(true);
     for (const p of topLevel) {
@@ -269,7 +232,7 @@ describe('clearRunOutputs', () => {
 
     helpers.clearRunOutputs();
 
-    // The sidecar and every top-level artifact are gone.
+    // The sidecar and both run-stage files are gone.
     const after = await fs.readdir(helpers.PARTIALS_DIR);
     expect(after.some((f) => f.endsWith('.json'))).toBe(false);
     for (const p of topLevel) {

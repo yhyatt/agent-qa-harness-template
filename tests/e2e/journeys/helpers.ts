@@ -23,7 +23,6 @@ import { type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
 import { formatTargetDeploymentLine, type TargetDeployment } from '../../../scripts/types.js';
 import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -44,16 +43,6 @@ export const SCREENSHOT_BASE = path.join(RUN_DIR, 'screenshots');
 export const REPORT_PATH = path.join(RUN_DIR, 'REPORT.md');
 export const JSON_FINDINGS_PATH = path.join(RUN_DIR, 'findings.json');
 /**
- * Downstream pipeline artifacts written INTO RUN_DIR by the dispatch, dedup,
- * and report scripts. Named here (mirroring the basenames those scripts
- * hardcode) so clearRunOutputs can wipe the full generated-output set from
- * one place at run start. The scripts remain the source of truth for the
- * basenames; these constants must stay in sync with them.
- */
-export const DISPATCHED_FINDINGS_PATH = path.join(RUN_DIR, 'findings.dispatched.json');
-export const DEDUPED_FINDINGS_PATH = path.join(RUN_DIR, 'findings.deduped.json');
-export const FINAL_REPORT_PATH = path.join(RUN_DIR, 'REPORT.final.md');
-/**
  * Per-project sidecars written by writeProjectSidecar, one file per
  * Playwright project/worker. aggregateRunReport reads every file here and
  * merges them into the combined findings.json / REPORT.md after all
@@ -66,47 +55,32 @@ fs.mkdirSync(SCREENSHOT_BASE, { recursive: true });
 fs.mkdirSync(PARTIALS_DIR, { recursive: true });
 
 /**
- * Turns a Playwright project name into a safe, collision-resistant path
- * segment for screenshot directories and sidecar filenames.
+ * Turns a Playwright project name into a traversal-safe path segment for
+ * screenshot directories and sidecar filenames. Project names come from
+ * playwright.config.ts (author-controlled slugs like `chromium-desktop`), so
+ * this is a defensive sanitizer, not a collision-avoidance scheme.
  *
- * A name that already consists only of [a-zA-Z0-9._-] and is not a dot-only
- * or empty edge case is returned verbatim, so `chromium-desktop`,
- * `mobile-iphone-13`, and `v1.2` stay clean.
- *
- * Any other name is not safe to use raw: replacing every disallowed char with
- * a hyphen is lossy (`a/b` and `a-b` both collapse to `a-b`), which would
- * re-introduce the last-writer-wins clobber this whole feature exists to
- * prevent, and a dot-only (`.`, `..`) or empty result would escape the run
- * directory under path.join. Both cases get a short deterministic suffix
- * derived from the ORIGINAL name. The suffix is a truncated (8-char) sha1, so
- * two distinct originals colliding on the same segment is astronomically
- * unlikely though not strictly impossible. The dot-only / empty base
- * additionally collapses to `_`.
+ * Safe names ([a-zA-Z0-9._-], e.g. `chromium-desktop`, `v1.2`) pass through
+ * verbatim. Any disallowed character maps to a hyphen. A dot-only (`.`, `..`)
+ * or empty result would escape the run dir via path.join, so it is replaced
+ * with the placeholder `_`.
  */
 export function sanitizeSegment(s: string): string {
   const cleaned = s.replace(/[^a-zA-Z0-9._-]/g, '-');
-  const isDotOnlyOrEmpty = cleaned === '' || /^\.+$/.test(cleaned);
-  // Already-safe names are used verbatim (cleaned === s means no char was
-  // replaced), excluding the dot-only / empty edge case.
-  if (cleaned === s && !isDotOnlyOrEmpty) return cleaned;
-  const suffix = createHash('sha1').update(s).digest('hex').slice(0, 8);
-  const base = isDotOnlyOrEmpty ? '_' : cleaned;
-  return `${base}-${suffix}`;
+  // Guard against path traversal: a dot-only or empty segment ('.', '..', '')
+  // could escape the run dir via path.join. Replace with a safe placeholder.
+  if (cleaned === '' || /^\.+$/.test(cleaned)) return '_';
+  return cleaned;
 }
 
 /**
- * Removes the full generated-output set of a prior run from RUN_DIR, so a run
+ * Removes the run-stage generated output of a prior run from RUN_DIR, so a run
  * that reuses RUN_DIR (default minute-granularity timestamp on quick reruns,
- * or a fixed QA_RUN_DIR) can never serve ANY stale artifact from a prior run.
- * Called once from tests/e2e/global-setup.ts at run start.
- *
- * Clears both the run-stage outputs and the downstream pipeline outputs:
+ * or a fixed QA_RUN_DIR) does not serve a prior run's report. Called once from
+ * tests/e2e/global-setup.ts at run start. Clears:
  *   - `.partials/ *.json`   per-project sidecars (dir created if absent)
  *   - findings.json          combined run report JSON (JSON_FINDINGS_PATH)
  *   - REPORT.md              combined run report markdown (REPORT_PATH)
- *   - findings.dispatched.json  dispatcher output (DISPATCHED_FINDINGS_PATH)
- *   - findings.deduped.json     dedup output (DEDUPED_FINDINGS_PATH)
- *   - REPORT.final.md           final report (FINAL_REPORT_PATH)
  *
  * Stale-data cases this closes:
  *   - Partial merge: a narrower rerun (test:e2e:desktop after a full
@@ -116,17 +90,14 @@ export function sanitizeSegment(s: string): string {
  *     matching nothing, or all journeys skipped) makes globalTeardown write
  *     nothing, so the prior run's findings.json / REPORT.md would linger and
  *     be served as if current (the dispatcher keys on that findings.json).
- *   - Stale downstream artifacts: after the same zero-sidecar rerun, a later
- *     `npm run dedup` / `npm run report` could consume the prior run's
- *     findings.dispatched.json / findings.deduped.json / REPORT.final.md via
- *     the latest pointer and publish old judgments for a run that had none.
  *
  * Does not touch screenshots/: orphaned stale screenshots are harmless since a
- * regenerated report only references the current run's paths, and clearing
- * per-project screenshot dirs is out of scope.
+ * regenerated report only references the current run's paths. Also leaves the
+ * downstream pipeline artifacts (findings.dispatched.json, findings.deduped.json,
+ * REPORT.final.md) to the dispatch/dedup/report scripts that own them.
  *
- * force: true on each rmSync makes an absent file a no-op (fresh run dir, or
- * a stage that did not run).
+ * force: true on each rmSync makes an absent file a no-op (fresh run dir, or a
+ * stage that did not run).
  */
 export function clearRunOutputs(): void {
   fs.mkdirSync(PARTIALS_DIR, { recursive: true });
@@ -135,15 +106,8 @@ export function clearRunOutputs(): void {
       fs.rmSync(path.join(PARTIALS_DIR, file), { force: true });
     }
   }
-  for (const artifact of [
-    JSON_FINDINGS_PATH,
-    REPORT_PATH,
-    DISPATCHED_FINDINGS_PATH,
-    DEDUPED_FINDINGS_PATH,
-    FINAL_REPORT_PATH,
-  ]) {
-    fs.rmSync(artifact, { force: true });
-  }
+  fs.rmSync(JSON_FINDINGS_PATH, { force: true });
+  fs.rmSync(REPORT_PATH, { force: true });
 }
 
 // ---------------------------------------------------------------------------
