@@ -15,6 +15,11 @@
  *   - Zero sidecars: aggregateRunReport writes no findings.json, preserving
  *     the "no journeys ran" discovery signal the dispatcher's latest-run
  *     scan depends on.
+ *   - A project that wrote a sidecar but produced zero JourneyResults still
+ *     gets a section in the combined report (union-derived project list).
+ *   - sanitizeSegment never returns a path-traversal segment.
+ *   - clearPartials removes stale sidecars (globalSetup uses it so a rerun
+ *     into a reused RUN_DIR does not resurrect an old project).
  *
  * QA_RUN_DIR must be set BEFORE helpers.ts is imported: module-level code in
  * helpers.ts resolves RUN_DIR / PARTIALS_DIR from process.env.QA_RUN_DIR at
@@ -30,7 +35,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { JourneyResult } from '../e2e/journeys/helpers.js';
+import type { JourneyResult, AxeSurface } from '../e2e/journeys/helpers.js';
 
 let tmpRoot: string;
 let helpers: typeof import('../e2e/journeys/helpers.js');
@@ -128,5 +133,69 @@ describe('report aggregation across Playwright projects', () => {
 
     await expect(fs.access(helpers.JSON_FINDINGS_PATH)).rejects.toThrow();
     await expect(fs.access(helpers.REPORT_PATH)).rejects.toThrow();
+  });
+
+  it('renders a section for a project whose sidecar produced zero results', async () => {
+    // chromium-desktop has one result; mobile-iphone-13 wrote a sidecar but
+    // produced zero JourneyResults (only an axe surface). The mobile project
+    // must still appear in the combined report rather than silently vanishing.
+    const mobileAxe: AxeSurface = {
+      route: '/',
+      project: 'mobile-iphone-13',
+      violations: 0,
+      top3: [],
+    };
+    await helpers.writeProjectSidecar('chromium-desktop', 0, [makeSameFindingResult()], []);
+    await helpers.writeProjectSidecar('mobile-iphone-13', 1, [], [mobileAxe]);
+
+    await helpers.aggregateRunReport('http://127.0.0.1:0');
+
+    const markdown = await fs.readFile(helpers.REPORT_PATH, 'utf-8');
+    // Both projects get a section even though mobile has zero results.
+    expect(markdown).toContain('## Project: chromium-desktop');
+    expect(markdown).toContain('## Project: mobile-iphone-13');
+
+    const text = await fs.readFile(helpers.JSON_FINDINGS_PATH, 'utf-8');
+    const combined = JSON.parse(text) as {
+      results: Array<{ project?: string }>;
+      findings: Array<{ project?: string }>;
+      axe_surfaces: Array<{ project: string }>;
+    };
+    // Only desktop contributed a result/finding; mobile contributed the axe
+    // surface that keeps it visible.
+    expect(combined.findings.length).toBe(1);
+    expect(combined.findings[0]!.project).toBe('chromium-desktop');
+    expect(combined.results.map((r) => r.project)).toEqual(['chromium-desktop']);
+    expect(combined.axe_surfaces.map((s) => s.project)).toEqual(['mobile-iphone-13']);
+  });
+});
+
+describe('sanitizeSegment path safety', () => {
+  it('collapses dot-only and empty segments to a safe fallback', () => {
+    expect(helpers.sanitizeSegment('.')).toBe('_');
+    expect(helpers.sanitizeSegment('..')).toBe('_');
+    expect(helpers.sanitizeSegment('...')).toBe('_');
+    expect(helpers.sanitizeSegment('')).toBe('_');
+  });
+
+  it('leaves normal project names unchanged', () => {
+    expect(helpers.sanitizeSegment('chromium-desktop')).toBe('chromium-desktop');
+    expect(helpers.sanitizeSegment('mobile-iphone-13')).toBe('mobile-iphone-13');
+    // Dots inside an otherwise valid name survive (e.g. a version tag).
+    expect(helpers.sanitizeSegment('v1.2')).toBe('v1.2');
+  });
+});
+
+describe('clearPartials', () => {
+  it('removes stale *.json sidecars from PARTIALS_DIR', async () => {
+    await helpers.writeProjectSidecar('stale-project', 7, [makeSameFindingResult()], []);
+    // Sanity: the sidecar exists before the clear.
+    const before = await fs.readdir(helpers.PARTIALS_DIR);
+    expect(before.some((f) => f.endsWith('.json'))).toBe(true);
+
+    helpers.clearPartials();
+
+    const after = await fs.readdir(helpers.PARTIALS_DIR);
+    expect(after.some((f) => f.endsWith('.json'))).toBe(false);
   });
 });

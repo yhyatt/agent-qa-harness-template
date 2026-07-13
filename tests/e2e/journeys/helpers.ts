@@ -58,9 +58,35 @@ fs.mkdirSync(PARTIALS_DIR, { recursive: true });
  * Replaces any character outside [a-zA-Z0-9._-] with a hyphen. Used to turn
  * a Playwright project name into a safe path segment for screenshot
  * directories and sidecar filenames.
+ *
+ * Dots are allowed so names like `v1.2` survive, but a dot-only result (`.`,
+ * `..`, or all-dots) or an empty result would resolve to the current or
+ * parent directory under path.join and escape SCREENSHOT_BASE / PARTIALS_DIR.
+ * Both cases collapse to the literal fallback `_`.
  */
 export function sanitizeSegment(s: string): string {
-  return s.replace(/[^a-zA-Z0-9._-]/g, '-');
+  const cleaned = s.replace(/[^a-zA-Z0-9._-]/g, '-');
+  if (cleaned === '' || /^\.+$/.test(cleaned)) return '_';
+  return cleaned;
+}
+
+/**
+ * Removes every `*.json` sidecar from PARTIALS_DIR, creating the dir if it is
+ * absent. Called once from tests/e2e/global-setup.ts at run start so a run
+ * that reuses RUN_DIR (default minute-granularity timestamp on quick reruns,
+ * or a fixed QA_RUN_DIR) does not merge stale sidecars from a prior run. The
+ * worst case this prevents: a narrower rerun (test:e2e:desktop after a full
+ * both-projects run) leaving mobile's stale sidecar, so the desktop-only
+ * report still shows mobile from the old run. Leaves the top-level
+ * findings.json / REPORT.md alone; globalTeardown regenerates those.
+ */
+export function clearPartials(): void {
+  fs.mkdirSync(PARTIALS_DIR, { recursive: true });
+  for (const file of fs.readdirSync(PARTIALS_DIR)) {
+    if (file.endsWith('.json')) {
+      fs.rmSync(path.join(PARTIALS_DIR, file), { force: true });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +528,12 @@ export async function writeProjectSidecar(
   const file = path.join(PARTIALS_DIR, `${sanitizeSegment(project)}__${workerIndex}.json`);
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(sidecar, null, 2));
+  // Remove the destination first: fs.renameSync cannot overwrite an existing
+  // file on Windows, and a rerun into the same RUN_DIR would otherwise fail
+  // to replace the prior sidecar. globalSetup's clearPartials already removes
+  // stale sidecars at run start; this is belt-and-suspenders for a same-run
+  // rewrite of the same (project, workerIndex).
+  fs.rmSync(file, { force: true });
   fs.renameSync(tmp, file);
 }
 
@@ -642,7 +674,17 @@ export async function aggregateRunReport(targetUrl: string): Promise<void> {
     `Run dir: ${RUN_DIR}`,
   ];
 
-  const projects = [...new Set(results.map((r) => r.project ?? 'unknown'))].sort();
+  // Project sections come from the UNION of every sidecar's declared project
+  // and any project seen in results or axe surfaces, so a project that ran but
+  // produced zero JourneyResults (only axe surfaces, or nothing) still gets a
+  // section instead of silently vanishing. Sorted for a deterministic report.
+  const projects = [
+    ...new Set([
+      ...sidecars.map((s) => s.project),
+      ...results.map((r) => r.project ?? 'unknown'),
+      ...axeSurfaces.map((s) => s.project),
+    ]),
+  ].sort();
 
   for (const project of projects) {
     const projectResults = results.filter((r) => (r.project ?? 'unknown') === project);

@@ -437,6 +437,9 @@ test.describe('J4: static surface walk', () => {
 // finished (see tests/e2e/global-teardown.ts).
 // ---------------------------------------------------------------------------
 
-test.afterAll(async ({}, testInfo) => {
-  await writeProjectSidecar(testInfo.project.name, testInfo.workerIndex, journeyResults, axeSurfaces);
+// The second arg to an afterAll hook is WorkerInfo, not TestInfo (afterAll
+// runs once per worker, outside any single test). It still carries
+// `.project.name` and `.workerIndex`, which is all we need here.
+test.afterAll(async ({}, workerInfo) => {
+  await writeProjectSidecar(workerInfo.project.name, workerInfo.workerIndex, journeyResults, axeSurfaces);
 });
