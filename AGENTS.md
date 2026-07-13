@@ -29,7 +29,7 @@ Adding a new framework or auth provider means a `docs/CUSTOMIZATION.md` section 
 6. **Auth fixtures are secrets.** `tests/e2e/fixtures/*.json` is gitignored. A leaked storageState file is a leaked session cookie. Treat with the same hygiene as `.env.local`.
 7. **The OpenRouter key is not optional.** Cross-provider second opinions are a load-bearing part of the dedup story (provider-family blind spots). The dispatcher fails loud if `OPENROUTER_API_KEY` is unset and a non-Anthropic model is requested.
 
-## Orchestration model (when run from Claude Code)
+## Scaffolding skill (when run from Claude Code)
 
 The template ships with a single Claude skill (`.claude/skills/agent-qa-harness/`). Invoking it does three things:
 
@@ -76,18 +76,35 @@ for s in ~/.claude/skills/*/; do ln -sfn "$s" ".claude/skills/$(basename "$s")";
 
 The `.gitignore` excludes `.claude/skills/` so the symlinks are local-only. The committed `agent-qa-harness/` subdirectory inside `.claude/skills/` is a regular directory, not a symlink, and is the one published with the template.
 
-## Orchestration (when implementing this repo)
+## Orchestration model
 
-The template repo itself follows the same slice routine Ballpark uses:
+Main agent = orchestrator. **Full operational playbook, read it when you start a slice: `docs/ORCHESTRATION.md`** (subagent roster, verification gate, post-PR routine, worktree caveats, with the mechanics and war stories behind each trigger below). Subagents: **Design** (Claude Design, system-first turn then per-surface screens), **Implement** (Sonnet 4.6 in a git worktree on `slice-N-<topic>`), **Review** (Opus 4.7, main worktree, read-only; runs the `dishonest-code-audit` skill), **Research** (Opus 4.7, main worktree; artifacts to gitignored `.<topic>-research/`, never `/tmp`).
 
-1. Each slice runs as a chain of subagents from the main session. Orchestrator routes, briefs, reviews, decides. Heavy code work goes to a worktree subagent.
-2. Implementation subagent runs with `isolation: "worktree"` on a feature branch like `slice-N-<topic>`. Brief includes scope, hard rules from this file, and a green gate (typecheck before reporting back). The impl agent does not push.
-3. Review subagent (Opus 4.7, read-only) reviews the diff in the main worktree, writes findings to `.audit-<date>/REVIEW-<topic>.md`. **The review subagent must invoke the `dishonest-code-audit` skill** as part of the pass (catches silent failures, stubs and mocks in production paths, stale TODOs claiming completion). Prose review without the audit skill regularly misses these.
-4. Orchestrator opens the PR with `gh pr create`. Never direct-merge to `main`.
-5. After every push, schedule a one-shot remote agent (`run_once_at`, not cron) about 10 minutes out to pull PR review state. Reply inline to every bot comment with the fixup SHA. On initial PR open both Codex and Copilot auto-trigger within a few minutes; on every subsequent fixup push, explicitly invoke both `@codex review` and `@copilot review again` as top-level PR comments. Neither auto-re-reviews on push, and without explicit invocation the 10-min check returns nothing and gives a false "PR quiet" signal.
+**Delegation rule: the orchestrator never hand-codes.** Diagnosis, verification, and review stay with the orchestrator; every `Edit`/`Write` against source, slice implementation AND review-driven fixups alike, goes through a subagent in a worktree, never an orchestrator-inline edit. Hazards + detail: `docs/ORCHESTRATION.md`.
 
-   The remote agent needs `Bash` in `allowed_tools` (for `gh` and `gh api` calls); the `Read` tool alone is insufficient, and tool-level read-only lockdown is the wrong fix. Enforce read-only behavior in the **brief** instead: explicitly forbid commits, pushes, file edits, and posting any GitHub comment. The remote agent reports its findings back to the orchestrator (CI status, bot activity since the last push, any outstanding round-N findings); the orchestrator decides what to push or post next.
-6. Persistent artifacts (audits, reviews, impl notes, research outputs) live in `.<kind>-<topic>/` directories at the repo root, gitignored. Never `/tmp`.
+**Slice loop:** design → impl (worktree) → review (Opus, read-only) → push the feature branch to `yhyatt/agent-qa-harness-template` → open PR → user merges. Plan: `HANDOFF.md + docs/DECISIONS.md`. Security review on the PR head when the slice touches auth/data. End each slice green (typecheck + tests + lint). **Never** direct-merge to `main`. The PR is the audit trail and the human gate. Deferred work → `docs/BACKLOG.md`, grouped by target slice.
+
+**Verification gate (binding, before review).** Triggers:
+1. Symlink **both** the secrets dotenv (e.g. `.env.local`) and `node_modules` from the main worktree into the impl worktree before any gate run, else routes that read secrets 500 silently, or the gate commands can't run in the worktree at all. A dep-adding slice does a real per-worktree install instead, never `npm install` over the symlink.
+2. Browser/CLI runs check *semantic* success: `curl -sf` preflight before `lighthouse`; check `r.runtimeError` in the JSON. These tools exit 0 even on a 500.
+3. Impl-agent benchmark/perf/test numbers are draft until the orchestrator independently re-runs them; fix mismatches via fixup commit, never amend.
+
+**Post-PR routine (binding, every PR).** Bots + the scheduled check are a *sensing layer*: they surface findings, hold no judgment. Every act-vs-wait call is the orchestrator's, by step 4's risk classification *alone*. A bot's severity label or a check's "read-only" framing is never an act-or-wait signal. Full steps + rationale in `docs/ORCHESTRATION.md`. Skeleton:
+1. After `gh pr create`, fire a `CronCreate` (`recurring:false`, `durable:false`, +10 min) that reads **all three comment sources every round, as three explicit calls**: (1) review objects, `gh pr view <n> --json reviews,statusCheckRollup,mergeable,mergeStateStatus`; (2) conversation/issue comments, `gh api --paginate repos/yhyatt/agent-qa-harness-template/issues/<n>/comments` (explicit + paginated, not `gh pr view --json comments`, which can truncate, this is where Codex posts its clean verdicts); (3) inline comments, `gh api --paginate repos/yhyatt/agent-qa-harness-template/pulls/<n>/comments`. `--paginate` required on both REST calls, else >30 comments undercounted. Codex posts clean verdicts as plain conversation comments, so a reviews-only read reports it silent when it already passed. Surfaces findings here. Prompt ends "...fetch, surface, then apply Post-PR step 4", never "forbid all edits."
+2. Reply inline to **every** bot comment via `gh api repos/yhyatt/agent-qa-harness-template/pulls/<n>/comments -F in_reply_to=<id> -F body=...`, referencing the fixup SHA. No comment skipped.
+3. After every fixup push, explicitly re-invoke bots *first*, then schedule the step-1 check. **Codex:** top-level `@codex review` comment (NOT REST `requested_reviewers`, that 200s but never registers); an *eyes* reaction on the comment = still processing. **Copilot:** REST `gh api -X POST repos/yhyatt/agent-qa-harness-template/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'` (the `@copilot review again` comment is unreliable). **Vercel Agent** may skip a fresh inline review on redeploy; request it manually if a round finds none of its comments. A thumbs-up with no comments = that bot's pass; re-request only the bot that's still silent, then reschedule step 1 until both Codex and Copilot have cleared the latest SHA.
+4. **Fixup-iteration autonomy:** all findings mechanical/low-risk → run the next full iteration automatically (delegate the fix to a worktree subagent, per the Delegation rule above → green gate → push → reply (step 2) → re-invoke (step 3) → re-schedule (step 1)), summarize *after*. ANY major technical risk OR UX/product decision → STOP, surface, wait for the user. (Re-running the review subagent on a fixup round is a judgment call: skip for small/benign, re-run for large/complex.)
+5. **User merges, not the orchestrator.** After merge: remove the impl worktree (`git worktree remove`), sync local `main`, mark the slice's `docs/BACKLOG.md` entry shipped.
+
+**Impl-subagent branch guard (mandatory, paste verbatim into every impl-agent prompt).** Worktrees may start with HEAD on a stale `main`; an agent that does not explicitly branch off pollutes the orchestrator's local `main` ref. Why base off `origin/main` not local `main`, plus worktree coordination under parallel sessions: `docs/ORCHESTRATION.md`. Every impl-agent prompt MUST include this exact block:
+
+> First git commands you run, before any other tool call:
+>
+> 1. `git rev-parse --show-toplevel`: output must contain `.claude/worktrees/`. If it does not, ABORT and report.
+> 2. `git fetch origin`: get current refs before choosing a base.
+> 3. `git checkout -b <branch-name> origin/main`: substitute the slice branch name; base off CURRENT `origin/main`, not local `main` or the inherited worktree HEAD. NEVER commit on `main`/`master`. If `git branch --show-current` returns `main` after this, repeat step 3.
+>
+> Verify after every commit: `git branch --show-current` must NOT be `main`/`master`. If it is, your last commit landed on the wrong ref. Stop and report.
 
 ## Out of scope for v1
 
