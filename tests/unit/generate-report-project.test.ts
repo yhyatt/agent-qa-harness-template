@@ -114,6 +114,26 @@ describe('generate-report surfaces project attribution', () => {
       JSON.stringify(deduped, null, 2),
     );
 
+    // Upstream findings.json carries axe_surfaces stamped per project. Two
+    // projects scanned the same route '/'; the axe summary table must render
+    // them as distinct, attributable rows rather than duplicates.
+    await fs.writeFile(
+      path.join(runDir, 'findings.json'),
+      JSON.stringify({
+        run_id: '2026-05-21-12-00',
+        timestamp: '2026-05-21T12:00:00Z',
+        target: 'https://example.com',
+        harness_sha: 'test',
+        target_deployment: null,
+        results: [],
+        findings: [],
+        axe_surfaces: [
+          { route: '/', project: 'chromium-desktop', violations: 0, top3: [] },
+          { route: '/', project: 'mobile-iphone-13', violations: 2, top3: ['color-contrast: low contrast'] },
+        ],
+      }),
+    );
+
     const result = spawnSync(TSX_BIN, [GENERATE_SCRIPT], {
       env: { ...process.env, QA_RUN_DIR: runDir },
       cwd: REPO_ROOT,
@@ -141,5 +161,11 @@ describe('generate-report surfaces project attribution', () => {
     // project, so J1 appears once per project rather than collapsed to one.
     expect(report).toContain('- J1 [chromium-desktop]:');
     expect(report).toContain('- J1 [mobile-iphone-13]:');
+
+    // The axe a11y summary table has a project column, so two projects that
+    // scanned the same route '/' are distinct, attributable rows.
+    expect(report).toContain('| route | project | violations | top issue |');
+    expect(report).toContain('| / | chromium-desktop | 0 |');
+    expect(report).toContain('| / | mobile-iphone-13 | 2 |');
   }, 30_000);
 });

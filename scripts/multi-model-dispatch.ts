@@ -49,9 +49,13 @@ const REPO_ROOT = path.resolve(__dirname, '..');
  * distinct. Findings written before the project field existed have
  * project undefined; `?? ''` maps them to a single project-agnostic bucket,
  * preserving the prior step_id-only behavior for single-project artifacts.
+ *
+ * Encoded with JSON.stringify rather than a raw `|` join because project is a
+ * free-form Playwright project name that could itself contain the delimiter;
+ * a structured array encoding cannot collide across different field splits.
  */
 function findingKey(f: Pick<StepFinding, 'step_id' | 'project'>): string {
-  return `${f.project ?? ''}|${f.step_id}`;
+  return JSON.stringify([f.project ?? '', f.step_id]);
 }
 
 // ---------------------------------------------------------------------------

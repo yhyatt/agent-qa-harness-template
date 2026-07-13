@@ -155,6 +155,12 @@ function normalizeTitle(t: string): string {
  * single-project or multi-model run has a constant `project` value across
  * every finding, so the tuple, and therefore the grouping, is unchanged from
  * before this field existed.
+ *
+ * The tuple is JSON.stringify-encoded before hashing rather than joined with a
+ * raw `|`, so a `|` inside any field cannot shift the field boundaries and
+ * collide with a different tuple. This changes the hash VALUES from earlier
+ * runs, which is fine: dedup_key is an opaque intra-run grouping id, never
+ * compared across runs, and grouping behavior for a given input is identical.
  */
 function dedupKey(
   journey_id: string,
@@ -163,13 +169,13 @@ function dedupKey(
   project: string,
   title: string,
 ): string {
-  const tuple = [
+  const tuple = JSON.stringify([
     journey_id,
     step_id,
     severityBucket(severity),
     project,
     normalizeTitle(title),
-  ].join('|');
+  ]);
   return createHash('sha1').update(tuple).digest('hex').slice(0, 12);
 }
 
@@ -180,9 +186,13 @@ function dedupKey(
  * mislabel them as a cross-severity collision. Scoping to (project, step_id)
  * compares within a single project+step. Findings written before the project
  * field existed map to a single project-agnostic bucket via `?? ''`.
+ *
+ * JSON.stringify-encoded rather than a raw `|` join because step_id and the
+ * free-form project name could contain the delimiter; a structured array
+ * encoding cannot collide across different field splits.
  */
 function stepKey(project: string, step_id: string): string {
-  return `${project}|${step_id}`;
+  return JSON.stringify([project, step_id]);
 }
 
 // ---------------------------------------------------------------------------

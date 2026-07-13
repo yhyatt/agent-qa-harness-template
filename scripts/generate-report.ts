@@ -652,13 +652,16 @@ async function main(): Promise<void> {
         '',
       );
     }
-    lines.push('| route | violations | top issue |');
-    lines.push('|-------|------------|-----------|');
+    lines.push('| route | project | violations | top issue |');
+    lines.push('|-------|---------|------------|-----------|');
     for (const s of axeSurfaces) {
       const violLabel = s.violations < 0 ? 'scan failed' : String(s.violations);
       const topIssue = escapeMarkdownInline(s.top3.length > 0 ? (s.top3[0] ?? '') : 'none').replace(/\|/g, '\\|');
       const safeRoute = escapeMarkdownInline(s.route).replace(/\|/g, '\\|');
-      lines.push(`| ${safeRoute} | ${violLabel} | ${topIssue} |`);
+      // project distinguishes two projects that scanned the same route (ADR-016).
+      // Absent on pre-ADR-016 artifacts, so default to 'unknown'.
+      const safeProject = escapeMarkdownInline(s.project ?? 'unknown').replace(/\|/g, '\\|');
+      lines.push(`| ${safeRoute} | ${safeProject} | ${violLabel} | ${topIssue} |`);
     }
   }
 

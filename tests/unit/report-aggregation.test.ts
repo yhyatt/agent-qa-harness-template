@@ -17,8 +17,10 @@
  *     scan depends on.
  *   - A project that wrote a sidecar but produced zero JourneyResults still
  *     gets a section in the combined report (union-derived project list).
- *   - sanitizeSegment never returns a path-traversal segment and is injective
- *     for names that required sanitizing (no two distinct originals collide).
+ *   - sanitizeSegment never returns a path-traversal segment and is
+ *     collision-resistant for names that required sanitizing (a hash suffix
+ *     makes distinct originals colliding on one segment astronomically
+ *     unlikely).
  *   - clearRunOutputs removes the full generated-output set (sidecars, the
  *     run report findings.json / REPORT.md, and the downstream
  *     findings.dispatched.json / findings.deduped.json / REPORT.final.md), so
@@ -195,7 +197,7 @@ describe('report aggregation across Playwright projects', () => {
   });
 });
 
-describe('sanitizeSegment path safety and injectivity', () => {
+describe('sanitizeSegment path safety and collision resistance', () => {
   it('leaves already-safe names unchanged', () => {
     expect(helpers.sanitizeSegment('chromium-desktop')).toBe('chromium-desktop');
     expect(helpers.sanitizeSegment('mobile-iphone-13')).toBe('mobile-iphone-13');
@@ -205,8 +207,8 @@ describe('sanitizeSegment path safety and injectivity', () => {
 
   it('does not collapse distinct names that clean to the same segment', () => {
     // 'a/b', 'a b', and 'a-b' all naively clean to 'a-b'. Only the already
-    // safe 'a-b' is returned verbatim; the others get a hash suffix, so no
-    // two distinct originals share a segment (no last-writer clobber).
+    // safe 'a-b' is returned verbatim; the others get a distinct hash suffix,
+    // so they do not collide on one segment (no last-writer clobber).
     const slash = helpers.sanitizeSegment('a/b');
     const space = helpers.sanitizeSegment('a b');
     const safe = helpers.sanitizeSegment('a-b');

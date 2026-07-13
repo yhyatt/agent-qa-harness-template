@@ -74,12 +74,14 @@ fs.mkdirSync(PARTIALS_DIR, { recursive: true });
  * `mobile-iphone-13`, and `v1.2` stay clean.
  *
  * Any other name is not safe to use raw: replacing every disallowed char with
- * a hyphen is not injective (`a/b` and `a-b` both collapse to `a-b`), which
- * would re-introduce the last-writer-wins clobber this whole feature exists to
+ * a hyphen is lossy (`a/b` and `a-b` both collapse to `a-b`), which would
+ * re-introduce the last-writer-wins clobber this whole feature exists to
  * prevent, and a dot-only (`.`, `..`) or empty result would escape the run
  * directory under path.join. Both cases get a short deterministic suffix
- * derived from the ORIGINAL name, so distinct originals never map to the same
- * segment. The dot-only / empty base additionally collapses to `_`.
+ * derived from the ORIGINAL name. The suffix is a truncated (8-char) sha1, so
+ * two distinct originals colliding on the same segment is astronomically
+ * unlikely though not strictly impossible. The dot-only / empty base
+ * additionally collapses to `_`.
  */
 export function sanitizeSegment(s: string): string {
   const cleaned = s.replace(/[^a-zA-Z0-9._-]/g, '-');
