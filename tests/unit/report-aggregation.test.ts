@@ -33,7 +33,7 @@
  * must be deferred).
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -45,6 +45,12 @@ let helpers: typeof import('../e2e/journeys/helpers.js');
 beforeAll(async () => {
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-report-aggregation-test-'));
   process.env.QA_RUN_DIR = tmpRoot;
+  // helpers.ts resolves RUN_DIR / PARTIALS_DIR from QA_RUN_DIR at module-eval
+  // time and caches them. Reset the module registry AFTER setting the env so
+  // this import evaluates helpers fresh against our temp dir, and so a cached
+  // helpers instance from another test in the same worker cannot leak its run
+  // dir into ours (or vice versa), which would make the suite order-dependent.
+  vi.resetModules();
   helpers = await import('../e2e/journeys/helpers.js');
 });
 
@@ -57,7 +63,13 @@ afterAll(async () => {
 // test, so the zero-sidecar test does not inherit sidecars or a findings.json
 // left over from an earlier test in this file.
 beforeEach(async () => {
-  const entries = await fs.readdir(helpers.PARTIALS_DIR).catch(() => []);
+  // Only a missing dir is an expected "nothing to clear" case; any other
+  // errno (permissions, IO) is a real failure and must surface, matching the
+  // product code (aggregateRunReport / clearRunOutputs).
+  const entries = await fs.readdir(helpers.PARTIALS_DIR).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return [] as string[];
+    throw err;
+  });
   await Promise.all(
     entries.map((e) => fs.rm(path.join(helpers.PARTIALS_DIR, e), { force: true })),
   );

@@ -489,11 +489,13 @@ async function main(): Promise<void> {
   // (captures zero-finding journeys) and from the deduped findings themselves.
   // project is absent on pre-ADR-016 artifacts, so it defaults to 'unknown'.
   const projectOf = (p: string | undefined): string => p ?? 'unknown';
-  const pairKey = (id: string, project: string): string => `${id} ${project}`;
+  // Map key is JSON.stringify([id, project]): text-safe and collision-proof
+  // (no delimiter char can appear inside a real id or project name, unlike a
+  // raw separator).
   const journeyKeys = new Map<string, { id: string; project: string }>();
   const addJourneyKey = (id: string, project: string | undefined): void => {
     const p = projectOf(project);
-    journeyKeys.set(pairKey(id, p), { id, project: p });
+    journeyKeys.set(JSON.stringify([id, p]), { id, project: p });
   };
   if (rawJourneyResults) {
     for (const r of rawJourneyResults) addJourneyKey(r.id, r.project);
