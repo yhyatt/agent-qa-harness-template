@@ -23,6 +23,7 @@ import { type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
 import { formatTargetDeploymentLine, type TargetDeployment } from '../../../scripts/types.js';
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -55,19 +56,30 @@ fs.mkdirSync(SCREENSHOT_BASE, { recursive: true });
 fs.mkdirSync(PARTIALS_DIR, { recursive: true });
 
 /**
- * Replaces any character outside [a-zA-Z0-9._-] with a hyphen. Used to turn
- * a Playwright project name into a safe path segment for screenshot
- * directories and sidecar filenames.
+ * Turns a Playwright project name into a safe, collision-resistant path
+ * segment for screenshot directories and sidecar filenames.
  *
- * Dots are allowed so names like `v1.2` survive, but a dot-only result (`.`,
- * `..`, or all-dots) or an empty result would resolve to the current or
- * parent directory under path.join and escape SCREENSHOT_BASE / PARTIALS_DIR.
- * Both cases collapse to the literal fallback `_`.
+ * A name that already consists only of [a-zA-Z0-9._-] and is not a dot-only
+ * or empty edge case is returned verbatim, so `chromium-desktop`,
+ * `mobile-iphone-13`, and `v1.2` stay clean.
+ *
+ * Any other name is not safe to use raw: replacing every disallowed char with
+ * a hyphen is not injective (`a/b` and `a-b` both collapse to `a-b`), which
+ * would re-introduce the last-writer-wins clobber this whole feature exists to
+ * prevent, and a dot-only (`.`, `..`) or empty result would escape the run
+ * directory under path.join. Both cases get a short deterministic suffix
+ * derived from the ORIGINAL name, so distinct originals never map to the same
+ * segment. The dot-only / empty base additionally collapses to `_`.
  */
 export function sanitizeSegment(s: string): string {
   const cleaned = s.replace(/[^a-zA-Z0-9._-]/g, '-');
-  if (cleaned === '' || /^\.+$/.test(cleaned)) return '_';
-  return cleaned;
+  const isDotOnlyOrEmpty = cleaned === '' || /^\.+$/.test(cleaned);
+  // Already-safe names are used verbatim (cleaned === s means no char was
+  // replaced), excluding the dot-only / empty edge case.
+  if (cleaned === s && !isDotOnlyOrEmpty) return cleaned;
+  const suffix = createHash('sha1').update(s).digest('hex').slice(0, 8);
+  const base = isDotOnlyOrEmpty ? '_' : cleaned;
+  return `${base}-${suffix}`;
 }
 
 /**

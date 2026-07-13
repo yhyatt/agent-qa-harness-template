@@ -17,7 +17,8 @@
  *     scan depends on.
  *   - A project that wrote a sidecar but produced zero JourneyResults still
  *     gets a section in the combined report (union-derived project list).
- *   - sanitizeSegment never returns a path-traversal segment.
+ *   - sanitizeSegment never returns a path-traversal segment and is injective
+ *     for names that required sanitizing (no two distinct originals collide).
  *   - clearRunOutputs removes stale sidecars AND the top-level
  *     findings.json / REPORT.md (globalSetup uses it so a rerun into a reused
  *     RUN_DIR neither resurrects an old project nor serves a stale report).
@@ -171,19 +172,49 @@ describe('report aggregation across Playwright projects', () => {
   });
 });
 
-describe('sanitizeSegment path safety', () => {
-  it('collapses dot-only and empty segments to a safe fallback', () => {
-    expect(helpers.sanitizeSegment('.')).toBe('_');
-    expect(helpers.sanitizeSegment('..')).toBe('_');
-    expect(helpers.sanitizeSegment('...')).toBe('_');
-    expect(helpers.sanitizeSegment('')).toBe('_');
-  });
-
-  it('leaves normal project names unchanged', () => {
+describe('sanitizeSegment path safety and injectivity', () => {
+  it('leaves already-safe names unchanged', () => {
     expect(helpers.sanitizeSegment('chromium-desktop')).toBe('chromium-desktop');
     expect(helpers.sanitizeSegment('mobile-iphone-13')).toBe('mobile-iphone-13');
     // Dots inside an otherwise valid name survive (e.g. a version tag).
     expect(helpers.sanitizeSegment('v1.2')).toBe('v1.2');
+  });
+
+  it('does not collapse distinct names that clean to the same segment', () => {
+    // 'a/b', 'a b', and 'a-b' all naively clean to 'a-b'. Only the already
+    // safe 'a-b' is returned verbatim; the others get a hash suffix, so no
+    // two distinct originals share a segment (no last-writer clobber).
+    const slash = helpers.sanitizeSegment('a/b');
+    const space = helpers.sanitizeSegment('a b');
+    const safe = helpers.sanitizeSegment('a-b');
+
+    expect(safe).toBe('a-b');
+    expect(slash).not.toBe(safe);
+    expect(space).not.toBe(safe);
+    expect(slash).not.toBe(space);
+    // The sanitized variants still start from the cleaned base.
+    expect(slash.startsWith('a-b-')).toBe(true);
+    expect(space.startsWith('a-b-')).toBe(true);
+  });
+
+  it('makes dot-only and empty names safe and mutually distinct', () => {
+    const dot = helpers.sanitizeSegment('.');
+    const dotdot = helpers.sanitizeSegment('..');
+    const dotdotdot = helpers.sanitizeSegment('...');
+    const empty = helpers.sanitizeSegment('');
+
+    // None is a bare dot-run or empty (would escape the run dir).
+    for (const seg of [dot, dotdot, dotdotdot, empty]) {
+      expect(seg).not.toBe('');
+      expect(/^\.+$/.test(seg)).toBe(false);
+      expect(seg.startsWith('_-')).toBe(true);
+    }
+    // All four are mutually distinct.
+    expect(new Set([dot, dotdot, dotdotdot, empty]).size).toBe(4);
+  });
+
+  it('is deterministic for the same input', () => {
+    expect(helpers.sanitizeSegment('a/b')).toBe(helpers.sanitizeSegment('a/b'));
   });
 });
 
