@@ -19,9 +19,11 @@
  *     gets a section in the combined report (union-derived project list).
  *   - sanitizeSegment never returns a path-traversal segment and is injective
  *     for names that required sanitizing (no two distinct originals collide).
- *   - clearRunOutputs removes stale sidecars AND the top-level
- *     findings.json / REPORT.md (globalSetup uses it so a rerun into a reused
- *     RUN_DIR neither resurrects an old project nor serves a stale report).
+ *   - clearRunOutputs removes the full generated-output set (sidecars, the
+ *     run report findings.json / REPORT.md, and the downstream
+ *     findings.dispatched.json / findings.deduped.json / REPORT.final.md), so
+ *     globalSetup wipes it at run start and a rerun into a reused RUN_DIR
+ *     neither resurrects an old project nor serves any stale artifact.
  *
  * QA_RUN_DIR must be set BEFORE helpers.ts is imported: module-level code in
  * helpers.ts resolves RUN_DIR / PARTIALS_DIR from process.env.QA_RUN_DIR at
@@ -73,8 +75,17 @@ beforeEach(async () => {
   await Promise.all(
     entries.map((e) => fs.rm(path.join(helpers.PARTIALS_DIR, e), { force: true })),
   );
-  await fs.rm(helpers.JSON_FINDINGS_PATH, { force: true });
-  await fs.rm(helpers.REPORT_PATH, { force: true });
+  // Remove every run-dir artifact so no test inherits one from an earlier test
+  // in the same worker (the run dir is shared across this file's tests).
+  await Promise.all(
+    [
+      helpers.JSON_FINDINGS_PATH,
+      helpers.REPORT_PATH,
+      helpers.DISPATCHED_FINDINGS_PATH,
+      helpers.DEDUPED_FINDINGS_PATH,
+      helpers.FINAL_REPORT_PATH,
+    ].map((p) => fs.rm(p, { force: true })),
+  );
 });
 
 function makeSameFindingResult(): JourneyResult {
@@ -231,25 +242,37 @@ describe('sanitizeSegment path safety and injectivity', () => {
 });
 
 describe('clearRunOutputs', () => {
-  it('removes stale sidecars and the top-level findings.json / REPORT.md', async () => {
-    // Seed a full prior-run output set: a sidecar plus both top-level files.
+  it('removes the full generated-output set: sidecars, run report, and downstream artifacts', async () => {
+    // Seed a full prior-run output set: a sidecar, the run-stage report
+    // (findings.json / REPORT.md), and the downstream pipeline artifacts
+    // (findings.dispatched.json / findings.deduped.json / REPORT.final.md).
     await helpers.writeProjectSidecar('stale-project', 7, [makeSameFindingResult()], []);
-    await fs.writeFile(helpers.JSON_FINDINGS_PATH, '{"run_id":"stale"}');
-    await fs.writeFile(helpers.REPORT_PATH, '# stale report\n');
+    const topLevel = [
+      helpers.JSON_FINDINGS_PATH,
+      helpers.REPORT_PATH,
+      helpers.DISPATCHED_FINDINGS_PATH,
+      helpers.DEDUPED_FINDINGS_PATH,
+      helpers.FINAL_REPORT_PATH,
+    ];
+    for (const p of topLevel) {
+      await fs.writeFile(p, '{"run_id":"stale"}');
+    }
 
-    // Sanity: all three exist before the clear.
+    // Sanity: the sidecar and every top-level artifact exist before the clear.
     const before = await fs.readdir(helpers.PARTIALS_DIR);
     expect(before.some((f) => f.endsWith('.json'))).toBe(true);
-    await expect(fs.access(helpers.JSON_FINDINGS_PATH)).resolves.toBeUndefined();
-    await expect(fs.access(helpers.REPORT_PATH)).resolves.toBeUndefined();
+    for (const p of topLevel) {
+      await expect(fs.access(p)).resolves.toBeUndefined();
+    }
 
     helpers.clearRunOutputs();
 
-    // All three are gone.
+    // The sidecar and every top-level artifact are gone.
     const after = await fs.readdir(helpers.PARTIALS_DIR);
     expect(after.some((f) => f.endsWith('.json'))).toBe(false);
-    await expect(fs.access(helpers.JSON_FINDINGS_PATH)).rejects.toThrow();
-    await expect(fs.access(helpers.REPORT_PATH)).rejects.toThrow();
+    for (const p of topLevel) {
+      await expect(fs.access(p)).rejects.toThrow();
+    }
   });
 
   it('leaves no stale findings.json after a zero-sidecar rerun into a reused dir', async () => {

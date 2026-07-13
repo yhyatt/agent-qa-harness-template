@@ -44,6 +44,16 @@ export const SCREENSHOT_BASE = path.join(RUN_DIR, 'screenshots');
 export const REPORT_PATH = path.join(RUN_DIR, 'REPORT.md');
 export const JSON_FINDINGS_PATH = path.join(RUN_DIR, 'findings.json');
 /**
+ * Downstream pipeline artifacts written INTO RUN_DIR by the dispatch, dedup,
+ * and report scripts. Named here (mirroring the basenames those scripts
+ * hardcode) so clearRunOutputs can wipe the full generated-output set from
+ * one place at run start. The scripts remain the source of truth for the
+ * basenames; these constants must stay in sync with them.
+ */
+export const DISPATCHED_FINDINGS_PATH = path.join(RUN_DIR, 'findings.dispatched.json');
+export const DEDUPED_FINDINGS_PATH = path.join(RUN_DIR, 'findings.deduped.json');
+export const FINAL_REPORT_PATH = path.join(RUN_DIR, 'REPORT.final.md');
+/**
  * Per-project sidecars written by writeProjectSidecar, one file per
  * Playwright project/worker. aggregateRunReport reads every file here and
  * merges them into the combined findings.json / REPORT.md after all
@@ -83,24 +93,38 @@ export function sanitizeSegment(s: string): string {
 }
 
 /**
- * Removes every generated output of a prior run from RUN_DIR: the `*.json`
- * sidecars under PARTIALS_DIR (creating the dir if absent), plus the
- * top-level findings.json and REPORT.md. Called once from
- * tests/e2e/global-setup.ts at run start so a run that reuses RUN_DIR
- * (default minute-granularity timestamp on quick reruns, or a fixed
- * QA_RUN_DIR) never serves a prior run's output.
+ * Removes the full generated-output set of a prior run from RUN_DIR, so a run
+ * that reuses RUN_DIR (default minute-granularity timestamp on quick reruns,
+ * or a fixed QA_RUN_DIR) can never serve ANY stale artifact from a prior run.
+ * Called once from tests/e2e/global-setup.ts at run start.
  *
- * Two stale-data cases this closes:
+ * Clears both the run-stage outputs and the downstream pipeline outputs:
+ *   - `.partials/ *.json`   per-project sidecars (dir created if absent)
+ *   - findings.json          combined run report JSON (JSON_FINDINGS_PATH)
+ *   - REPORT.md              combined run report markdown (REPORT_PATH)
+ *   - findings.dispatched.json  dispatcher output (DISPATCHED_FINDINGS_PATH)
+ *   - findings.deduped.json     dedup output (DEDUPED_FINDINGS_PATH)
+ *   - REPORT.final.md           final report (FINAL_REPORT_PATH)
+ *
+ * Stale-data cases this closes:
  *   - Partial merge: a narrower rerun (test:e2e:desktop after a full
  *     both-projects run) would leave mobile's stale sidecar, so the
  *     desktop-only report would still show mobile from the old run.
- *   - Stale top-level report: a rerun that produces ZERO sidecars (a --grep
+ *   - Stale run report: a rerun that produces ZERO sidecars (a --grep
  *     matching nothing, or all journeys skipped) makes globalTeardown write
  *     nothing, so the prior run's findings.json / REPORT.md would linger and
  *     be served as if current (the dispatcher keys on that findings.json).
+ *   - Stale downstream artifacts: after the same zero-sidecar rerun, a later
+ *     `npm run dedup` / `npm run report` could consume the prior run's
+ *     findings.dispatched.json / findings.deduped.json / REPORT.final.md via
+ *     the latest pointer and publish old judgments for a run that had none.
  *
- * Does not touch screenshots/: orphaned stale screenshots are harmless since
- * the regenerated report only references the current run's paths.
+ * Does not touch screenshots/: orphaned stale screenshots are harmless since a
+ * regenerated report only references the current run's paths, and clearing
+ * per-project screenshot dirs is out of scope.
+ *
+ * force: true on each rmSync makes an absent file a no-op (fresh run dir, or
+ * a stage that did not run).
  */
 export function clearRunOutputs(): void {
   fs.mkdirSync(PARTIALS_DIR, { recursive: true });
@@ -109,11 +133,15 @@ export function clearRunOutputs(): void {
       fs.rmSync(path.join(PARTIALS_DIR, file), { force: true });
     }
   }
-  // Remove the prior run's top-level report so a zero-sidecar rerun into a
-  // reused run dir does not leave stale output. force makes an absent file a
-  // no-op (fresh run dir, or first run).
-  fs.rmSync(JSON_FINDINGS_PATH, { force: true });
-  fs.rmSync(REPORT_PATH, { force: true });
+  for (const artifact of [
+    JSON_FINDINGS_PATH,
+    REPORT_PATH,
+    DISPATCHED_FINDINGS_PATH,
+    DEDUPED_FINDINGS_PATH,
+    FINAL_REPORT_PATH,
+  ]) {
+    fs.rmSync(artifact, { force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
