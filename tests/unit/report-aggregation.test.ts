@@ -24,6 +24,12 @@
  *     report findings.json / REPORT.md), so globalSetup wipes it at run start
  *     and a rerun into a reused RUN_DIR neither resurrects an old project nor
  *     serves a stale run report.
+ *   - Incremental sidecar rewrites (ADR-017): journeys.spec.ts now calls
+ *     writeProjectSidecar after every journey instead of once in a final
+ *     afterAll, rewriting the same (project, workerIndex) sidecar each time.
+ *     A test locks the contract this relies on: if the worker hard-crashes
+ *     partway through, aggregateRunReport still reports every journey whose
+ *     flush completed before the crash.
  *
  * QA_RUN_DIR must be set BEFORE helpers.ts is imported: module-level code in
  * helpers.ts resolves RUN_DIR / PARTIALS_DIR from process.env.QA_RUN_DIR at
@@ -186,6 +192,26 @@ describe('report aggregation across Playwright projects', () => {
     expect(combined.findings[0]!.project).toBe('chromium-desktop');
     expect(combined.results.map((r) => r.project)).toEqual(['chromium-desktop']);
     expect(combined.axe_surfaces.map((s) => s.project)).toEqual(['mobile-iphone-13']);
+  });
+
+  it('incremental sidecar rewrites keep completed journeys when the run dies before the last one', async () => {
+    // Simulates the per-journey flush in journeys.spec.ts: writeProjectSidecar is
+    // called after each journey with the accumulated-so-far results, rewriting the
+    // same (project, workerIndex) sidecar. After J1 then J2 the sidecar holds
+    // [J1, J2]; then the worker hard-crashes before J3 is recorded, so no further
+    // write happens. aggregateRunReport must still report J1 and J2 rather than
+    // losing the whole worker's work (the pre-ADR-017 afterAll-only failure mode).
+    const j1: JourneyResult = { ...makeSameFindingResult(), id: 'J1' };
+    const j2: JourneyResult = { ...makeSameFindingResult(), id: 'J2' };
+    await helpers.writeProjectSidecar('chromium-desktop', 0, [j1], []);
+    await helpers.writeProjectSidecar('chromium-desktop', 0, [j1, j2], []);
+    // ...worker hard-crashes here, before J3's flush.
+
+    await helpers.aggregateRunReport('http://127.0.0.1:0');
+
+    const text = await fs.readFile(helpers.JSON_FINDINGS_PATH, 'utf-8');
+    const combined = JSON.parse(text) as { results: Array<{ id: string }> };
+    expect(combined.results.map((r) => r.id).sort()).toEqual(['J1', 'J2']);
   });
 });
 

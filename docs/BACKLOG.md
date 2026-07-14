@@ -2,6 +2,10 @@
 
 Deferred items, grouped by slice. Items move out of here when a PR ships them.
 
+## Slice: incremental journey sidecar (crash-safety)
+
+Nothing deferred. Shipped the per-journey sidecar flush and the atomic sidecar replacement (ADR-017); see docs/DECISIONS.md.
+
 ## Slice 1: multi-model-dispatch.ts
 
 Nothing deferred. Implementation matches `HANDOFF.md` "Open design questions" #1 (model selection) by shipping a documented default and exposing `QA_MODELS` as the override.
