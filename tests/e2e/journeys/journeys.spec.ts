@@ -18,21 +18,24 @@
  *   3. runAxe(page) on each significant render
  *   4. captureLocaleSnapshot(page) for user-visible text
  *   5. Push StepFinding objects into a local findings[] array
- *   6. Push a JourneyResult into the shared journeyResults at the end
+ *   6. Call recordJourney(testInfo, result) at the end, which appends the
+ *      JourneyResult to the shared journeyResults and immediately flushes
+ *      the per-project sidecar so a completed journey survives a hard crash
+ *      later in the run
  *   7. expect(status).not.toBe('fail') propagates exit code
  *
  * Playwright runs each project (chromium-desktop, mobile-iphone-13) as a
  * fresh copy of this module in its own worker process, so journeyResults and
- * axeSurfaces below only ever hold one project's results. Each project's
- * test.afterAll writes that project's slice to a per-project sidecar via
- * writeProjectSidecar. A Playwright globalTeardown
- * (tests/e2e/global-teardown.ts) then merges every sidecar into one combined
- * findings.json / REPORT.md after all projects finish, so a full multi-project
- * run produces a single report instead of the last project's afterAll
- * clobbering the earlier one's output.
+ * axeSurfaces below only ever hold one project's results. Each journey calls
+ * recordJourney, which appends to journeyResults and rewrites that project's
+ * sidecar with the accumulated-so-far snapshot via writeProjectSidecar (see
+ * ADR-017). A Playwright globalTeardown (tests/e2e/global-teardown.ts) then
+ * merges every sidecar into one combined findings.json / REPORT.md after all
+ * projects finish, so a full multi-project run produces a single report
+ * instead of the last project's writes clobbering the earlier one's output.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type TestInfo } from '@playwright/test';
 import {
   screenshot,
   attachListeners,
@@ -64,6 +67,24 @@ const FALLBACK_JOIN_CODE: string | null = null;
 // Accumulated results written to the report after all tests finish.
 const journeyResults: JourneyResult[] = [];
 const axeSurfaces: AxeSurface[] = [];
+
+// Persist a completed journey immediately: append it to the accumulator and
+// flush the per-worker sidecar to disk. Flushing after EVERY journey (rather
+// than once in a final afterAll) is what makes the report crash-safe. Two
+// failure modes matter. A test failure that restarts the worker: the failing
+// journey flushes its own result here BEFORE its assertion throws, so the
+// dying worker's sidecar already holds all of its journeys on disk, and the
+// restart worker writes under a unique workerIndex, so the two sidecars union
+// without clobber. A HARD crash, a browser OOM or a killed process: flushing
+// here means only the in-flight journey is lost; every completed one is
+// already on disk. Persistence used to happen once in a final afterAll, which
+// fired on a restart but NOT on a hard crash, so a crash lost the whole
+// worker's accumulated journeys. The sidecar shape is unchanged; only its
+// write cadence moved. See ADR-017.
+async function recordJourney(testInfo: TestInfo, result: JourneyResult): Promise<void> {
+  journeyResults.push(result);
+  await writeProjectSidecar(testInfo.project.name, testInfo.workerIndex, journeyResults, axeSurfaces);
+}
 
 // convention: tag auth-gated describes by suffixing the title with " @auth"
 //   test.describe('host flow @auth', ...) is caught by test:e2e:auth, skipped by test:e2e:no-auth.
@@ -112,7 +133,7 @@ test.describe('J1: primary-user happy path', () => {
       } finally {
         await ctx.close();
       }
-      journeyResults.push({
+      await recordJourney(testInfo, {
         id: 'J1',
         status: 'auth-blocked',
         durationMs: Date.now() - startMs,
@@ -194,7 +215,7 @@ test.describe('J1: primary-user happy path', () => {
       await ctx.close();
     }
 
-    journeyResults.push({
+    await recordJourney(testInfo, {
       id: 'J1',
       status,
       durationMs: Date.now() - startMs,
@@ -234,7 +255,7 @@ test.describe('J2: secondary-user join', () => {
           judgment: 'Set FALLBACK_JOIN_CODE or populate the auth fixture to enable J2.',
         }),
       );
-      journeyResults.push({
+      await recordJourney(testInfo, {
         id: 'J2',
         status: 'auth-blocked',
         durationMs: Date.now() - startMs,
@@ -275,7 +296,7 @@ test.describe('J2: secondary-user join', () => {
       await ctx.close();
     }
 
-    journeyResults.push({
+    await recordJourney(testInfo, {
       id: 'J2',
       status,
       durationMs: Date.now() - startMs,
@@ -309,7 +330,7 @@ test.describe('J3: primary-user secondary flow', () => {
           judgment: 'Run npm run populate-auth to enable J3.',
         }),
       );
-      journeyResults.push({
+      await recordJourney(testInfo, {
         id: 'J3',
         status: 'auth-blocked',
         durationMs: Date.now() - startMs,
@@ -325,7 +346,7 @@ test.describe('J3: primary-user secondary flow', () => {
     //   - change account settings
     //   - export data
 
-    journeyResults.push({
+    await recordJourney(testInfo, {
       id: 'J3',
       status: 'pass',
       durationMs: Date.now() - startMs,
@@ -419,7 +440,7 @@ test.describe('J4: static surface walk', () => {
       }
     }
 
-    journeyResults.push({
+    await recordJourney(testInfo, {
       id: 'J4',
       status,
       durationMs: Date.now() - startMs,
@@ -431,15 +452,8 @@ test.describe('J4: static surface walk', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Per-project sidecar writer - runs once after all tests in this project's
-// copy of this file. The combined report is written later by
+// Sidecar persistence now happens per-journey via recordJourney above, not in
+// a final afterAll. The combined report is still assembled later by
 // aggregateRunReport in a Playwright globalTeardown, once every project has
 // finished (see tests/e2e/global-teardown.ts).
 // ---------------------------------------------------------------------------
-
-// The second arg to an afterAll hook is WorkerInfo, not TestInfo (afterAll
-// runs once per worker, outside any single test). It still carries
-// `.project.name` and `.workerIndex`, which is all we need here.
-test.afterAll(async ({}, workerInfo) => {
-  await writeProjectSidecar(workerInfo.project.name, workerInfo.workerIndex, journeyResults, axeSurfaces);
-});

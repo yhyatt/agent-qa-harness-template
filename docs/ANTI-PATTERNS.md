@@ -188,3 +188,11 @@ await page.waitForLoadState('networkidle');
 ```
 
 Web-first assertions like `await expect(link).toBeVisible({ timeout: 8_000 })` poll for the same reason and are usually the cleanest fix.
+
+## 17. Autosave clobbering a journey's own cleanup write
+
+**Anti-pattern:** a journey resets shared state via a direct API write, for example POSTing an empty or blank record to clean up a shared staging record after itself, then closes the page or context and calls it done.
+
+**Why it fails:** the target app's own client-side autosave, a debounced save plus a `beforeunload` keepalive, can still be holding the pre-cleanup in-memory state. If it fires after the cleanup API call, it re-sends that stale state with a fresher client timestamp, and the app's save-ordering guard keeps the stale write. The cleanup silently loses the race and the shared record is left dirty for the next run.
+
+**Do instead:** before the cleanup write, clear the app's client-side persistence (e.g. `localStorage`) so `beforeunload` has nothing left to re-send, and wait for any in-flight save to settle deterministically, await the specific save response or network-idle, not a blind `waitForTimeout` sleep (see anti-pattern 2, hard-coded timing waits).

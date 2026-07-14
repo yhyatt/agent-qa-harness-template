@@ -336,3 +336,23 @@ ADR-style log of design choices. Each entry: what was decided, what alternatives
 - `PARTIALS_DIR` and its contents are gitignored the same way the rest of `.qa-runs/` is; no new top-level ignore rule is needed.
 
 **Revisit if:** Playwright changes `globalTeardown` semantics (e.g. running it per-shard instead of per-invocation) in a way that breaks the once-after-all-projects guarantee; a consuming app adds a third project and wants per-project reports as a first-class output rather than sections of one combined report; the dedup key needs a fourth axis (e.g. locale) for the same reason `project` was added here.
+
+## ADR-017: Per-journey sidecar flush (crash-safety)
+
+**Decided:** persistence moves from a single `test.afterAll` flush to a flush after every journey. `journeys.spec.ts` now calls a local `recordJourney` helper at the end of each journey, which appends the `JourneyResult` to the module-level `journeyResults` accumulator and immediately calls `writeProjectSidecar`, rewriting the same per-`(project, workerIndex)` sidecar with the accumulated-so-far snapshot. `writeProjectSidecar`'s shape, `aggregateRunReport`, and the report schema are all unchanged; only the write cadence moved.
+
+**Motivation:** the test-failure worker-restart case was already handled by ADR-016 (`test.afterAll` fires on the dying worker before it restarts, and each worker's `workerIndex` is unique, so the restarted worker's sidecar cannot clobber the dying one's; `aggregateRunReport` unions both). The residual gap this closes is the one ADR-016's degradation section names explicitly: a HARD crash, a browser OOM or a killed process, where `afterAll` never runs at all. Previously that lost the whole worker's accumulated journeys, every one of them, not just the in-flight one. Now only the in-flight journey (the one that had not finished and called `recordJourney` yet) is lost; every journey that completed before the crash is already on disk.
+
+**Alternatives:**
+
+- True per-journey sidecar FILES, one file per journey instead of one file per `(project, workerIndex)` rewritten in place. Rejected: this changes the sidecar shape, the `aggregateRunReport` reader, and every aggregation test, for the same crash-safety guarantee a same-file rewrite already provides. More blast radius for no extra benefit.
+- Keep `afterAll`-only persistence. Rejected: this is the status quo, and it is exactly the gap this ADR closes.
+
+**Trade-off:**
+
+- The sidecar is now rewritten once per journey (N atomic writes per worker instead of 1, where N is the journey count for that project). N is small (the template ships four journeys; a real journey catalog is unlikely to run into the hundreds per project), the write is atomic (temp file plus rename, unchanged from ADR-016), and there is no concurrent reader during the run (`aggregateRunReport` only runs in `globalTeardown`, after every worker has finished), so the added write volume is negligible.
+- The module-level `journeyResults` accumulator is retained (recordJourney still pushes into it) but is no longer load-bearing for restart-survival. Disk, the unique-`workerIndex` sidecar filenames, and `aggregateRunReport`'s union already provide that; the accumulator now exists mainly so `writeProjectSidecar` always receives the full accumulated-so-far list rather than one journey at a time.
+
+Note: one behavioral edge. Under the old afterAll flush, a worker that ran but skipped every journey still wrote an empty sidecar, so a fully-skipped project appeared in the combined report as an empty section. With the per-journey flush, a worker that records no journey writes no sidecar, so a fully-skipped project is simply absent. This is unreachable with the shipped stub journeys (every journey, including its early-return branches, calls recordJourney) and is arguably more honest: a project that executed nothing no longer renders as a clean empty section. It surfaces only if a consumer gates an entire Playwright project out at runtime.
+
+**Revisit if:** journey counts per worker grow large enough that full-snapshot rewrites per journey become a measurable cost (switch to append-style per-journey files at that point); or Playwright changes its worker-restart / `afterAll` semantics in a way that changes what ADR-016 already relies on.

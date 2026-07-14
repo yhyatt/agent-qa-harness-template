@@ -10,7 +10,10 @@
  *   - attachListeners       console errors + network 4xx/5xx
  *   - runAxe                axe-core a11y scan with WCAG 2.1 AA tags
  *   - hasAuthFixture        storageState fixture detection
- *   - writeProjectSidecar   per-project results/findings sidecar writer
+ *   - writeProjectSidecar   per-project results/findings sidecar writer,
+ *                           called after EVERY journey (an incremental
+ *                           flush, see ADR-017), not once in a final
+ *                           afterAll
  *   - aggregateRunReport    merges every project's sidecar into one combined
  *                           findings.json / REPORT.md; called once from
  *                           tests/e2e/global-teardown.ts after every
@@ -496,9 +499,12 @@ export function makeFinding(
 // Playwright runs each project (chromium-desktop, mobile-iphone-13) in its
 // own worker process, so this module gets a fresh copy per project and the
 // module-level journeyResults/axeSurfaces arrays in journeys.spec.ts only
-// ever hold one project's results. Each project's test.afterAll calls
-// writeProjectSidecar to persist its own slice under PARTIALS_DIR; a
-// Playwright globalTeardown (tests/e2e/global-teardown.ts) then calls
+// ever hold one project's results. journeys.spec.ts calls writeProjectSidecar
+// after EVERY journey (via its recordJourney helper), rewriting that
+// project's sidecar under PARTIALS_DIR with the accumulated-so-far snapshot;
+// this incremental flush is what makes the report crash-safe (ADR-017). The
+// sidecar shape and the aggregation step below are unchanged: a Playwright
+// globalTeardown (tests/e2e/global-teardown.ts) still calls
 // aggregateRunReport exactly once, after every project has finished, to
 // merge all sidecars into the single combined findings.json / REPORT.md that
 // the dispatcher, dedup, and generate-report scripts read.
@@ -520,6 +526,12 @@ interface ProjectSidecar {
  * write: no git lookup, no /__build fetch, no markdown rendering. Those
  * happen once in aggregateRunReport after every project has written its
  * sidecar.
+ *
+ * Called after every journey (an incremental flush, see ADR-017) rather
+ * than once in a final afterAll, so the same (project, workerIndex) sidecar
+ * is rewritten with the accumulated-so-far snapshot each time. This
+ * function's shape and semantics are unchanged either way: it always writes
+ * whatever `results` it is given for that (project, workerIndex) pair.
  */
 export async function writeProjectSidecar(
   project: string,

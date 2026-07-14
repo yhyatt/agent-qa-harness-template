@@ -2,6 +2,10 @@
 
 Deferred items, grouped by slice. Items move out of here when a PR ships them.
 
+## Slice: incremental journey sidecar (crash-safety)
+
+Shipped: per-journey sidecar flush (ADR-017). `journeys.spec.ts` now persists each journey's result immediately via `recordJourney` instead of waiting for a final `test.afterAll`, so a hard worker crash (browser OOM, killed process) only loses the in-flight journey instead of the whole worker's accumulated results. Sidecar shape and `aggregateRunReport` are unchanged.
+
 ## Slice 1: multi-model-dispatch.ts
 
 Nothing deferred. Implementation matches `HANDOFF.md` "Open design questions" #1 (model selection) by shipping a documented default and exposing `QA_MODELS` as the override.
