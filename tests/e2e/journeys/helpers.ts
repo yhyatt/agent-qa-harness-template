@@ -561,13 +561,28 @@ export async function writeProjectSidecar(
   const file = path.join(PARTIALS_DIR, `${sanitizeSegment(project)}__${workerIndex}.json`);
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(sidecar, null, 2));
-  // Remove the destination first: fs.renameSync cannot overwrite an existing
-  // file on Windows, and a rerun into the same RUN_DIR would otherwise fail
-  // to replace the prior sidecar. globalSetup's clearRunOutputs already
-  // removes stale sidecars at run start; this is belt-and-suspenders for a
-  // same-run rewrite of the same (project, workerIndex).
-  fs.rmSync(file, { force: true });
-  fs.renameSync(tmp, file);
+  // Replace the destination atomically. On POSIX, renameSync overwrites an
+  // existing file in one atomic step, so the sidecar is never absent, even for
+  // an instant, during a rewrite: a crash mid-rename leaves either the prior
+  // snapshot or the new one, never nothing. That is what lets the per-journey
+  // flush (ADR-017) keep its guarantee across the many rewrites of the same
+  // (project, workerIndex) sidecar. We do NOT unlink the destination first: an
+  // unlink-then-rename opens a window where a crash between the two leaves no
+  // sidecar at all, silently dropping every journey already flushed to that
+  // worker's file. Windows renameSync cannot overwrite an existing file, so
+  // fall back to unlink-then-rename there only; that reintroduces the window on
+  // Windows alone, and the harness CI and target platforms are POSIX.
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST' || code === 'EPERM' || code === 'ENOTEMPTY') {
+      fs.rmSync(file, { force: true });
+      fs.renameSync(tmp, file);
+    } else {
+      throw err;
+    }
+  }
 }
 
 /**
